@@ -1,53 +1,36 @@
-# Obie CRM
+# ostOA 中亚运输管理系统
 
-Obie CRM is a fresh Cloudflare-native starter built for:
+第一阶段先交付两个模块：
 
-- Cloudflare Pages for the React admin
-- Cloudflare Workers for the API
-- Cloudflare D1 for data storage
+- 询单管理：录入客户、货物、起运地、目的地、重量体积、报关方式和特殊要求。
+- 生成方案：基于询单生成中亚铁路/汽铁联运方案，保存路线、时效、预估费用和操作说明。
 
-## Apps
+## 技术栈
 
-- `apps/web`: React + Vite admin console
-- `apps/api`: Cloudflare Worker API and D1 migrations
+- `apps/web`: React + Vite + Ant Design
+- `apps/api`: Cloudflare Worker API + D1 migrations
+- `GitHub Actions`: CI、Cloudflare Pages 部署、Worker/D1 部署
 
-## Default admin
+## 默认管理员
 
 - Email: `admin@obiecrm.com`
 - Password: `Admin123!`
 
-## Local development
-
-1. Create API secrets:
+## 本地开发
 
 ```powershell
-Copy-Item apps/api/.dev.vars.example apps/api/.dev.vars
-```
-
-2. Start the Worker locally:
-
-```powershell
+npm.cmd install
+npm.cmd run db:migrate:local -w apps/api
 npm.cmd run dev:api
-```
-
-3. In a second terminal, start the web app:
-
-```powershell
 npm.cmd run dev:web
 ```
 
-4. Apply local D1 migrations if needed:
+## 部署
 
-```powershell
-npm.cmd run db:migrate:local -w apps/api
-```
+CI/CD 已放在 `.github/workflows`：
 
-## Deployment
+- `CI`: 安装依赖、类型检查、构建前后端
+- `Deploy API`: 应用 D1 migrations 并部署 `ostoa-api`
+- `Deploy Web`: 构建 Web 并部署到 Cloudflare Pages
 
-GitHub Actions are set up for:
-
-- `CI`: typecheck and build
-- `Deploy Web`: deploy the admin to Cloudflare Pages
-- `Deploy API`: apply D1 migrations and deploy the Worker
-
-Full setup steps are in [docs/github-cloudflare-cicd.md](C:/Users/Administrator/Documents/New%20project/docs/github-cloudflare-cicd.md).
+完整授权和配置步骤见 [docs/github-cloudflare-cicd.md](C:/Users/Administrator/Documents/New%20project/docs/github-cloudflare-cicd.md)。

@@ -125,6 +125,34 @@ type ProductPayload = {
   notes?: string;
 };
 
+type TransportInquiryPayload = {
+  customerId?: string;
+  customerName?: string;
+  contactName?: string;
+  contactPhone?: string;
+  cargoName?: string;
+  cargoType?: string;
+  origin?: string;
+  destination?: string;
+  weightKg?: number | string | null;
+  volumeCbm?: number | string | null;
+  packageCount?: number | string | null;
+  readyDate?: string | null;
+  targetArrivalDate?: string | null;
+  customsMode?: string;
+  temperatureRequirement?: string;
+  specialRequirement?: string;
+};
+
+type TransportPlanPayload = {
+  title?: string;
+  route?: string;
+  transitDays?: number | string | null;
+  estimatedCost?: number | string | null;
+  currency?: string;
+  planText?: string;
+};
+
 type EntityTagPayload = {
   entityType?: 'customer' | 'contact';
   entityId?: string;
@@ -164,7 +192,7 @@ function corsOrigin(request: Request, env: Env) {
   if (origin) {
     try {
       const originUrl = new URL(origin);
-      if (originUrl.hostname === 'obiecrm-web.pages.dev' || originUrl.hostname.endsWith('.obiecrm-web.pages.dev')) {
+      if (originUrl.hostname === 'ostoa-web.pages.dev' || originUrl.hostname.endsWith('.ostoa-web.pages.dev')) {
         return origin;
       }
     } catch {
@@ -384,6 +412,289 @@ async function listProductsForCustomers(env: Env, customerIds: string[]) {
   }
 
   return grouped;
+}
+
+function toNumber(value: unknown) {
+  if (value === null || value === undefined || value === '') {
+    return null;
+  }
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function toInteger(value: unknown) {
+  const parsed = toNumber(value);
+  return parsed === null ? null : Math.round(parsed);
+}
+
+function jsonArray<T>(value: string | null | undefined, fallback: T[] = []) {
+  if (!value) {
+    return fallback;
+  }
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? (parsed as T[]) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function businessNo(prefix: string) {
+  const datePart = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+  const randomPart = crypto.randomUUID().replace(/-/g, '').slice(0, 6).toUpperCase();
+  return `${prefix}-${datePart}-${randomPart}`;
+}
+
+function normalizeTransportInquiry(row: Record<string, unknown>) {
+  return {
+    id: row.id,
+    inquiryNo: row.inquiryNo,
+    customerId: row.customerId,
+    customerName: row.customerName,
+    contactName: row.contactName,
+    contactPhone: row.contactPhone,
+    cargoName: row.cargoName,
+    cargoType: row.cargoType,
+    origin: row.origin,
+    destination: row.destination,
+    weightKg: row.weightKg,
+    volumeCbm: row.volumeCbm,
+    packageCount: row.packageCount,
+    readyDate: row.readyDate,
+    targetArrivalDate: row.targetArrivalDate,
+    customsMode: row.customsMode,
+    temperatureRequirement: row.temperatureRequirement,
+    specialRequirement: row.specialRequirement,
+    status: row.status,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+    plans: jsonArray(row.plans as string | null),
+  };
+}
+
+async function listTransportInquiries(env: Env) {
+  const rows = await env.DB.prepare(
+    `
+      SELECT
+        transport_inquiries.id,
+        transport_inquiries.inquiry_no as inquiryNo,
+        transport_inquiries.customer_id as customerId,
+        COALESCE(NULLIF(transport_inquiries.customer_name, ''), customers.name) as customerName,
+        transport_inquiries.contact_name as contactName,
+        transport_inquiries.contact_phone as contactPhone,
+        transport_inquiries.cargo_name as cargoName,
+        transport_inquiries.cargo_type as cargoType,
+        transport_inquiries.origin,
+        transport_inquiries.destination,
+        transport_inquiries.weight_kg as weightKg,
+        transport_inquiries.volume_cbm as volumeCbm,
+        transport_inquiries.package_count as packageCount,
+        transport_inquiries.ready_date as readyDate,
+        transport_inquiries.target_arrival_date as targetArrivalDate,
+        transport_inquiries.customs_mode as customsMode,
+        transport_inquiries.temperature_requirement as temperatureRequirement,
+        transport_inquiries.special_requirement as specialRequirement,
+        transport_inquiries.status,
+        transport_inquiries.created_at as createdAt,
+        transport_inquiries.updated_at as updatedAt,
+        COALESCE(
+          json_group_array(
+            CASE
+              WHEN transport_plans.id IS NULL THEN NULL
+              ELSE json_object(
+                'id', transport_plans.id,
+                'planNo', transport_plans.plan_no,
+                'title', transport_plans.title,
+                'route', transport_plans.route,
+                'transitDays', transport_plans.transit_days,
+                'estimatedCost', transport_plans.estimated_cost,
+                'currency', transport_plans.currency,
+                'planText', transport_plans.plan_text,
+                'status', transport_plans.status,
+                'createdAt', transport_plans.created_at
+              )
+            END
+          ),
+          '[]'
+        ) as plans
+      FROM transport_inquiries
+      LEFT JOIN customers ON customers.id = transport_inquiries.customer_id
+      LEFT JOIN transport_plans ON transport_plans.inquiry_id = transport_inquiries.id
+      GROUP BY transport_inquiries.id
+      ORDER BY transport_inquiries.created_at DESC
+    `,
+  ).all<Record<string, unknown>>();
+
+  return rows.results.map((row) => ({
+    ...normalizeTransportInquiry(row),
+    plans: jsonArray<Record<string, unknown>>(row.plans as string | null).filter(Boolean),
+  }));
+}
+
+async function getTransportInquiry(env: Env, id: string) {
+  const items = await listTransportInquiries(env);
+  return items.find((item) => item.id === id) ?? null;
+}
+
+async function createTransportInquiry(env: Env, body: TransportInquiryPayload) {
+  const customerId = ensureString(body.customerId);
+  let customerName = ensureString(body.customerName);
+  if (customerId && !customerName) {
+    const customer = await env.DB.prepare('SELECT name FROM customers WHERE id = ?').bind(customerId).first<{ name: string }>();
+    customerName = customer?.name ?? '';
+  }
+
+  const cargoName = ensureString(body.cargoName);
+  const origin = ensureString(body.origin);
+  const destination = ensureString(body.destination);
+  if (!customerName || !cargoName || !origin || !destination) {
+    return { error: '客户、货物、起运地和目的地不能为空。' };
+  }
+
+  const id = createId('tinq');
+  const now = isoNow();
+  await env.DB.prepare(
+    `
+      INSERT INTO transport_inquiries (
+        id, inquiry_no, customer_id, customer_name, contact_name, contact_phone, cargo_name, cargo_type,
+        origin, destination, weight_kg, volume_cbm, package_count, ready_date, target_arrival_date,
+        customs_mode, temperature_requirement, special_requirement, status, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `,
+  )
+    .bind(
+      id,
+      businessNo('INQ'),
+      customerId || null,
+      customerName,
+      ensureString(body.contactName),
+      ensureString(body.contactPhone),
+      cargoName,
+      ensureString(body.cargoType) || '普货',
+      origin,
+      destination,
+      toNumber(body.weightKg),
+      toNumber(body.volumeCbm),
+      toInteger(body.packageCount),
+      ensureString(body.readyDate),
+      ensureString(body.targetArrivalDate),
+      ensureString(body.customsMode) || '一般贸易',
+      ensureString(body.temperatureRequirement) || '常温',
+      ensureString(body.specialRequirement),
+      'NEW',
+      now,
+      now,
+    )
+    .run();
+
+  await recordActivity(env, '新建运输询单', `${customerName}：${origin} -> ${destination}，货物：${cargoName}`);
+  return { id };
+}
+
+function buildGeneratedPlan(inquiry: Awaited<ReturnType<typeof getTransportInquiry>>, override: TransportPlanPayload = {}) {
+  if (!inquiry) {
+    return null;
+  }
+  const weight = Number(inquiry.weightKg ?? 0);
+  const volume = Number(inquiry.volumeCbm ?? 0);
+  const destination = String(inquiry.destination ?? '');
+  const isKazakhstan = /哈萨克|Kazakhstan|Almaty|Astana|阿拉木图|阿斯塔纳/i.test(destination);
+  const isUzbekistan = /乌兹别克|Uzbekistan|Tashkent|塔什干/i.test(destination);
+  const route = ensureString(override.route) || `${inquiry.origin} -> 乌鲁木齐/西安集结 -> ${isKazakhstan ? '霍尔果斯/阿拉山口' : isUzbekistan ? '霍尔果斯-阿拉木图-塔什干' : '中亚口岸'} -> ${inquiry.destination}`;
+  const transitDays = toInteger(override.transitDays) ?? (isUzbekistan ? 18 : isKazakhstan ? 13 : 16);
+  const estimatedCost =
+    toNumber(override.estimatedCost) ??
+    Math.max(1200, Math.round((weight * 0.28 + volume * 35 + transitDays * 90) / 10) * 10);
+  const title = ensureString(override.title) || `${inquiry.origin} 至 ${inquiry.destination} 中亚运输方案`;
+  const planText =
+    ensureString(override.planText) ||
+    [
+      `推荐路线：${route}。`,
+      `运输方式：优先铁路/汽铁联运，预计 ${transitDays} 天，适合 ${inquiry.cargoName} 的时效和成本平衡。`,
+      `操作节点：1. 起运地提货与装箱加固；2. 出口报关资料预审；3. 口岸换装/查验跟踪；4. 目的国清关；5. 末端派送签收。`,
+      `风险提示：关注口岸排队、申报要素一致性、木包装/熏蒸、超重超限和目的国清关资料提前确认。`,
+      `费用预估：${estimatedCost} ${ensureString(override.currency) || 'USD'}，最终报价需结合车板/箱型、保险、清关和派送地址复核。`,
+    ].join('\n');
+
+  return {
+    title,
+    route,
+    transitDays,
+    estimatedCost,
+    currency: ensureString(override.currency) || 'USD',
+    planText,
+  };
+}
+
+async function generateTransportPlan(env: Env, inquiryId: string, body: TransportPlanPayload) {
+  const inquiry = await getTransportInquiry(env, inquiryId);
+  if (!inquiry) {
+    return { error: '询单不存在。' };
+  }
+
+  const generated = buildGeneratedPlan(inquiry, body);
+  if (!generated) {
+    return { error: '无法生成方案。' };
+  }
+
+  const id = createId('tpln');
+  const now = isoNow();
+  await env.DB.prepare(
+    `
+      INSERT INTO transport_plans (
+        id, inquiry_id, plan_no, title, route, transit_days, estimated_cost, currency, plan_text, status, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `,
+  )
+    .bind(
+      id,
+      inquiryId,
+      businessNo('PLN'),
+      generated.title,
+      generated.route,
+      generated.transitDays,
+      generated.estimatedCost,
+      generated.currency,
+      generated.planText,
+      'DRAFT',
+      now,
+      now,
+    )
+    .run();
+
+  await env.DB.prepare('UPDATE transport_inquiries SET status = ?, updated_at = ? WHERE id = ?')
+    .bind('PLAN_READY', now, inquiryId)
+    .run();
+  await recordActivity(env, '生成运输方案', `${inquiry.inquiryNo} 已生成方案：${generated.title}`);
+
+  return { id };
+}
+
+async function listTransportPlans(env: Env) {
+  const rows = await env.DB.prepare(
+    `
+      SELECT
+        transport_plans.id,
+        transport_plans.inquiry_id as inquiryId,
+        transport_plans.plan_no as planNo,
+        transport_plans.title,
+        transport_plans.route,
+        transport_plans.transit_days as transitDays,
+        transport_plans.estimated_cost as estimatedCost,
+        transport_plans.currency,
+        transport_plans.plan_text as planText,
+        transport_plans.status,
+        transport_plans.created_at as createdAt,
+        transport_inquiries.inquiry_no as inquiryNo,
+        transport_inquiries.customer_name as customerName,
+        transport_inquiries.cargo_name as cargoName
+      FROM transport_plans
+      JOIN transport_inquiries ON transport_inquiries.id = transport_plans.inquiry_id
+      ORDER BY transport_plans.created_at DESC
+    `,
+  ).all();
+
+  return rows.results;
 }
 
 async function listTagGroups(env: Env) {
@@ -1315,7 +1626,7 @@ export default {
       return json(
         {
           status: 'ok',
-          service: 'obiecrm-api',
+          service: 'ostoa-api',
           timestamp: new Date().toISOString(),
         },
         { status: 200 },
@@ -1454,6 +1765,44 @@ export default {
         { status: 200 },
         origin,
       );
+    }
+
+    if (url.pathname === '/api/transport-inquiries' && request.method === 'GET') {
+      return json({ items: await listTransportInquiries(env) }, { status: 200 }, origin);
+    }
+
+    if (url.pathname === '/api/transport-inquiries' && request.method === 'POST') {
+      const result = await createTransportInquiry(env, await parseBody<TransportInquiryPayload>(request));
+      if (result.error !== undefined) {
+        return badRequest(origin, result.error);
+      }
+      return json(await getTransportInquiry(env, result.id), { status: 201 }, origin);
+    }
+
+    const transportInquiryMatch = url.pathname.match(/^\/api\/transport-inquiries\/([^/]+)$/);
+    if (transportInquiryMatch && request.method === 'GET') {
+      const item = await getTransportInquiry(env, transportInquiryMatch[1]);
+      if (!item) {
+        return notFound(origin, 'Transport inquiry not found.');
+      }
+      return json(item, { status: 200 }, origin);
+    }
+
+    const transportPlanGenerateMatch = url.pathname.match(/^\/api\/transport-inquiries\/([^/]+)\/generate-plan$/);
+    if (transportPlanGenerateMatch && request.method === 'POST') {
+      const result = await generateTransportPlan(
+        env,
+        transportPlanGenerateMatch[1],
+        await parseBody<TransportPlanPayload>(request),
+      );
+      if (result.error !== undefined) {
+        return badRequest(origin, result.error);
+      }
+      return json(await getTransportInquiry(env, transportPlanGenerateMatch[1]), { status: 201 }, origin);
+    }
+
+    if (url.pathname === '/api/transport-plans' && request.method === 'GET') {
+      return json({ items: await listTransportPlans(env) }, { status: 200 }, origin);
     }
 
     if (url.pathname === '/api/customers' && request.method === 'GET') {

@@ -1,5 +1,5 @@
 {
-  "name": "@obiecrm/api",
+  "name": "@ostoa/api",
   "version": "0.1.0",
   "private": true,
   "scripts": {
@@ -7,8 +7,8 @@
     "build": "tsc --noEmit -p tsconfig.json",
     "lint": "tsc --noEmit -p tsconfig.json",
     "deploy": "wrangler deploy",
-    "db:migrate:local": "set XDG_CONFIG_HOME=.wrangler\\config&& set WRANGLER_LOG_PATH=.wrangler\\logs&& wrangler d1 migrations apply obiecrm --local",
-    "db:migrate:remote": "wrangler d1 migrations apply obiecrm --remote"
+    "db:migrate:local": "set XDG_CONFIG_HOME=.wrangler\\config&& set WRANGLER_LOG_PATH=.wrangler\\logs&& wrangler d1 migrations apply ostoa --local",
+    "db:migrate:remote": "wrangler d1 migrations apply ostoa --remote"
   },
   "dependencies": {
     "@nestjs/common": "^11.1.17",

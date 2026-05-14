@@ -1,15 +1,19 @@
 # GitHub + Cloudflare CI/CD
 
-## Architecture
+## 架构
 
-- `admin.obiecrm.com`: Cloudflare Pages
-- `api.obiecrm.com`: Cloudflare Worker
-- `D1`: primary database
-- `GitHub Actions`: CI + deploy
+- Web: Cloudflare Pages，推荐项目名 `ostoa-web`
+- API: Cloudflare Worker，名称 `ostoa-api`
+- Database: Cloudflare D1，推荐数据库名 `ostoa`
+- CI/CD: GitHub Actions
 
-## GitHub secrets
+## 需要你在 GitHub 配置的 Secrets
 
-Add these in `Settings -> Secrets and variables -> Actions`.
+进入 `object-tao/ostOA` 仓库：
+
+`Settings -> Secrets and variables -> Actions -> New repository secret`
+
+添加：
 
 - `CLOUDFLARE_API_TOKEN`
 - `CLOUDFLARE_ACCOUNT_ID`
@@ -17,70 +21,57 @@ Add these in `Settings -> Secrets and variables -> Actions`.
 - `VITE_API_BASE_URL`
 - `AUTH_SECRET`
 
-Recommended values:
+推荐值：
 
-- `CLOUDFLARE_PAGES_PROJECT`: `obiecrm-web`
-- `VITE_API_BASE_URL`: `https://api.obiecrm.com`
-- `AUTH_SECRET`: a long random string
+- `CLOUDFLARE_PAGES_PROJECT`: `ostoa-web`
+- `VITE_API_BASE_URL`: `https://ostoa-api.<你的 workers.dev 子域>`，绑定自定义域后可改为你的 API 域名
+- `AUTH_SECRET`: 一串足够长的随机字符串
 
-## Cloudflare setup
+## Cloudflare 一次性设置
 
-### 1. Create the Pages project
+1. 创建 Pages 项目，名称建议 `ostoa-web`。构建由 GitHub Actions 执行，不需要开启 Cloudflare 自带 GitHub 构建。
+2. 创建 D1 数据库，名称建议 `ostoa`。
+3. 把 D1 database id 写入 [wrangler.toml](C:/Users/Administrator/Documents/New%20project/apps/api/wrangler.toml) 的 `database_id`。
+4. 创建 Cloudflare API Token，权限至少包含：
+   - Account: Cloudflare Pages Edit
+   - Account: Workers Scripts Edit
+   - Account: D1 Edit
+   - Zone: DNS Edit，仅当你要自动或手动绑定自定义域时需要
 
-Create a Pages project named `obiecrm-web`.
+## 首次部署顺序
 
-The actual deploy will be handled by GitHub Actions, so you do not need Cloudflare's own GitHub build integration.
+1. 推送代码到 `https://github.com/object-tao/ostOA.git`
+2. 配置 GitHub Secrets
+3. 在 Cloudflare 创建 Pages 项目和 D1 数据库
+4. 更新 `apps/api/wrangler.toml` 的 `database_id`
+5. 在 GitHub Actions 手动运行 `Deploy API`
+6. 在 GitHub Actions 手动运行 `Deploy Web`
+7. 验证 API：`/api/health`
+8. 验证 Web：打开 Cloudflare Pages 分配的域名并登录
 
-### 2. Create the D1 database
+## 工作流说明
 
-Create a D1 database named `obiecrm`.
+### `ci.yml`
 
-After creation, copy the database ID and replace the placeholder in [wrangler.toml](C:/Users/Administrator/Documents/New%20project/apps/api/wrangler.toml).
+每次 PR 或推送到 `main/master` 时运行：
 
-### 3. Create the Worker
-
-Deploy will create the Worker named `obiecrm-api`.
-
-After the first successful deploy:
-
-1. Open `Workers & Pages`
-2. Open `obiecrm-api`
-3. Add custom domain `api.obiecrm.com`
-
-### 4. Bind the Pages custom domain
-
-Open the Pages project and add custom domain `admin.obiecrm.com`.
-
-## First deployment order
-
-1. Push this repo to GitHub
-2. Add GitHub secrets
-3. Create the Pages project
-4. Create the D1 database
-5. Replace the D1 database ID in [wrangler.toml](C:/Users/Administrator/Documents/New%20project/apps/api/wrangler.toml)
-6. Run `Deploy API`
-7. Run `Deploy Web`
-8. Bind `api.obiecrm.com`
-9. Bind `admin.obiecrm.com`
-
-## What the workflows do
+- `npm ci`
+- `npm run lint`
+- `npm run build`
 
 ### `deploy-api.yml`
 
-- Applies D1 migrations remotely
-- Publishes the Worker
-- Injects `AUTH_SECRET`
+- 执行 `wrangler d1 migrations apply ostoa --remote`
+- 部署 Worker `ostoa-api`
+- 注入 `AUTH_SECRET`
 
 ### `deploy-web.yml`
 
-- Writes the production API base URL
-- Builds the React app
-- Deploys static assets to Cloudflare Pages
+- 写入生产环境 `VITE_API_BASE_URL`
+- 构建 React 前端
+- 部署 `apps/web/dist` 到 Cloudflare Pages
 
-## Manual checks
+## 默认登录
 
-After deployment, verify:
-
-- `https://api.obiecrm.com/api/health`
-- `https://admin.obiecrm.com`
-- Login works with `admin@obiecrm.com / Admin123!`
+- Email: `admin@obiecrm.com`
+- Password: `Admin123!`

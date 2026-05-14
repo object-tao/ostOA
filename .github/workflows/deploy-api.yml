@@ -31,7 +31,7 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: apps/api
-          command: d1 migrations apply obiecrm --remote
+          command: d1 migrations apply ostoa --remote
 
       - name: Deploy Worker
         uses: cloudflare/wrangler-action@v3
