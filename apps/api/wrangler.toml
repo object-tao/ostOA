@@ -8,4 +8,4 @@ database_name = "ostoa"
 database_id = "afee03da-8eb8-49e0-977e-4fb549cff106"
 
 [vars]
-CORS_ORIGIN = "https://ostoa-web.pages.dev"
+CORS_ORIGIN = "https://ostoa.org,https://www.ostoa.org,https://ostoa-web.pages.dev"

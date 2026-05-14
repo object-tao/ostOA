@@ -10,6 +10,8 @@
 - `apps/web`: React + Vite + Ant Design
 - `apps/api`: Cloudflare Worker API + D1 migrations
 - `GitHub Actions`: CI、Cloudflare Pages 部署、Worker/D1 部署
+- 生产域名：`https://ostoa.org`
+- API 域名：`https://api.ostoa.org`
 
 ## 默认管理员
 
