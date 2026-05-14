@@ -128,6 +128,7 @@ type ProductPayload = {
 type TransportInquiryPayload = {
   customerId?: string;
   customerName?: string;
+  salesperson?: string;
   contactName?: string;
   contactPhone?: string;
   cargoName?: string;
@@ -458,6 +459,7 @@ function normalizeTransportInquiry(row: Record<string, unknown>) {
     inquiryNo: row.inquiryNo,
     customerId: row.customerId,
     customerName: row.customerName,
+    salesperson: row.salesperson,
     contactName: row.contactName,
     contactPhone: row.contactPhone,
     cargoName: row.cargoName,
@@ -488,6 +490,7 @@ async function listTransportInquiries(env: Env) {
         transport_inquiries.inquiry_no as inquiryNo,
         transport_inquiries.customer_id as customerId,
         COALESCE(NULLIF(transport_inquiries.customer_name, ''), customers.name) as customerName,
+        transport_inquiries.salesperson as salesperson,
         transport_inquiries.contact_name as contactName,
         transport_inquiries.contact_phone as contactPhone,
         transport_inquiries.cargo_name as cargoName,
@@ -565,10 +568,10 @@ async function createTransportInquiry(env: Env, body: TransportInquiryPayload) {
   await env.DB.prepare(
     `
       INSERT INTO transport_inquiries (
-        id, inquiry_no, customer_id, customer_name, contact_name, contact_phone, cargo_name, cargo_type,
+        id, inquiry_no, customer_id, customer_name, salesperson, contact_name, contact_phone, cargo_name, cargo_type,
         origin, destination, weight_kg, volume_cbm, package_count, ready_date, target_arrival_date,
         customs_mode, temperature_requirement, special_requirement, cargo_files, status, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `,
   )
     .bind(
@@ -576,6 +579,7 @@ async function createTransportInquiry(env: Env, body: TransportInquiryPayload) {
       businessNo('INQ'),
       customerId || null,
       customerName,
+      ensureString(body.salesperson),
       ensureString(body.contactName),
       ensureString(body.contactPhone),
       cargoName,

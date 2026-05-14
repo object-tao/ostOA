@@ -88,6 +88,7 @@ type TransportInquiry = {
   inquiryNo: string;
   customerId?: string | null;
   customerName: string;
+  salesperson?: string | null;
   contactName?: string | null;
   contactPhone?: string | null;
   cargoName: string;
@@ -298,6 +299,7 @@ export default function App() {
       ),
     },
     { title: '客户', dataIndex: 'customerName' },
+    { title: '业务员', render: (_, row) => row.salesperson || '-' },
     { title: '货物', dataIndex: 'cargoName' },
     { title: '线路', render: (_, row) => `${row.origin} -> ${row.destination}` },
     { title: '重量/体积', render: (_, row) => `${row.weightKg ?? '-'} kg / ${row.volumeCbm ?? '-'} m3` },
@@ -535,6 +537,9 @@ export default function App() {
           <Form.Item name="customerName" label="客户名称" rules={[{ required: true, message: '请选择或填写客户' }]}>
             <Input placeholder="可直接填写临时客户" />
           </Form.Item>
+          <Form.Item name="salesperson" label="业务员">
+            <Input placeholder="负责该询单的业务员姓名" />
+          </Form.Item>
           <Row gutter={12}>
             <Col span={12}>
               <Form.Item name="contactName" label="联系人">
@@ -640,6 +645,8 @@ export default function App() {
             <Descriptions column={2} bordered size="small">
               <Descriptions.Item label="客户">{selectedInquiry.customerName}</Descriptions.Item>
               <Descriptions.Item label="状态">{statusTag(selectedInquiry.status)}</Descriptions.Item>
+              <Descriptions.Item label="业务员">{selectedInquiry.salesperson || '-'}</Descriptions.Item>
+              <Descriptions.Item label="联系人">{selectedInquiry.contactName || '-'}</Descriptions.Item>
               <Descriptions.Item label="货物">{selectedInquiry.cargoName}</Descriptions.Item>
               <Descriptions.Item label="类型">{selectedInquiry.cargoType || '-'}</Descriptions.Item>
               <Descriptions.Item label="起运地">{selectedInquiry.origin}</Descriptions.Item>
