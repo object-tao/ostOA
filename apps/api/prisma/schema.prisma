@@ -1,0 +1,739 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+enum ProjectStatus {
+  DRAFT
+  PENDING_APPROVAL
+  IN_PROGRESS
+  PARTIAL_COMPLETED
+  COMPLETED
+  SETTLED
+  CLOSED
+  CANCELLED
+}
+
+enum BatchStatus {
+  PENDING
+  DISPATCHING
+  LOADING
+  IN_TRANSIT
+  ARRIVED
+  COMPLETED
+  CANCELLED
+}
+
+enum VehicleOrderStatus {
+  PENDING_DISPATCH
+  DISPATCHED
+  ARRIVED_FACTORY
+  LOADING
+  DEPARTED
+  ARRIVED_PORT
+  CUSTOMS_DECLARING
+  EXITED_COUNTRY
+  ENTERED_COUNTRY
+  DELIVERING
+  SIGNED
+  COMPLETED
+  ABNORMAL
+  CANCELLED
+}
+
+enum AbnormalStatus {
+  OPEN
+  PROCESSING
+  RESOLVED
+  CLOSED
+}
+
+enum OwnerType {
+  OWNED
+  OUTSOURCED
+}
+
+enum VehicleStatus {
+  AVAILABLE
+  DISPATCHED
+  MAINTENANCE
+  OFFLINE
+}
+
+enum DriverStatus {
+  AVAILABLE
+  ON_DUTY
+  OFFLINE
+}
+
+enum OperatorType {
+  DRIVER
+  DISPATCHER
+  FIELD
+  SYSTEM
+}
+
+enum SignStatus {
+  UNSIGNED
+  PARTIAL
+  SIGNED
+}
+
+enum ReceiptPaymentType {
+  RECEIVABLE
+  PAYABLE
+}
+
+enum InquiryQuoteStatus {
+  UNQUOTED
+  QUOTED
+}
+
+enum WaybillStatus {
+  CREATED
+  DECLARING
+  CUSTOMS_CLEARING
+  IN_TRANSIT
+  ARRIVED
+  COMPLETED
+  CANCELLED
+}
+
+enum TaskStatus {
+  PENDING
+  ASSIGNED
+  RUNNING
+  FINISHED
+  CANCELLED
+}
+
+enum ApprovalDecisionStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum OversizePermitMode {
+  AUTO
+  SEMI_AUTO
+  MANUAL
+}
+
+enum OversizeReviewStatus {
+  AUTO_APPROVED
+  MANUAL_REVIEW
+  QUOTE_PENDING
+}
+
+model Customer {
+  id             String         @id @default(cuid())
+  customerCode   String         @unique
+  customerName   String
+  contactName    String?
+  contactPhone   String?
+  country        String?
+  address        String?
+  settlementType String?
+  creditDays     Int?
+  remark         String?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+  inquiries      Inquiry[]
+  projects       Project[]
+  vehicleOrders  VehicleOrder[]
+  waybills       Waybill[]
+}
+
+model Inquiry {
+  id                 String    @id @default(cuid())
+  inquiryNo          String    @unique
+  customerId         String
+  salesUserId        String?
+  cargoName          String
+  cargoDescription   String?
+  requirementDescription String?
+  requirementAttachments String? @default("[]")
+  quoteAttachments   String? @default("[]")
+  originPlace        String
+  destinationPlace   String
+  totalWeight        Float?
+  totalVolume        Float?
+  totalQuantity      Int?
+  expectedTime       DateTime?
+  specialRequirement String?
+  inquiryStatus      String
+  quoteStatus        InquiryQuoteStatus @default(UNQUOTED)
+  quotedAmount       Float?
+  quoteCurrency      String?
+  quoteValidUntil    DateTime?
+  convertedProjectId String?   @unique
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+  customer           Customer  @relation(fields: [customerId], references: [id])
+  convertedProject   Project?  @relation("InquiryConvertedProject", fields: [convertedProjectId], references: [id])
+  projects           Project[] @relation("ProjectInquiry")
+}
+
+model Project {
+  id                    String            @id @default(cuid())
+  projectNo             String            @unique
+  projectName           String
+  customerId            String
+  inquiryId             String?
+  businessType          String?
+  originPlace           String
+  destinationPlace      String
+  contractAmount        Float             @default(0)
+  contractCurrency      String            @default("CNY")
+  estimatedCost         Float             @default(0)
+  actualCost            Float             @default(0)
+  grossProfit           Float             @default(0)
+  grossProfitRate       Float             @default(0)
+  plannedVehicleCount   Int               @default(0)
+  actualVehicleCount    Int               @default(0)
+  completedVehicleCount Int               @default(0)
+  startDate             DateTime?
+  endDate               DateTime?
+  projectStatus         ProjectStatus     @default(DRAFT)
+  remark                String?
+  createdBy             String?
+  createdAt             DateTime          @default(now())
+  updatedAt             DateTime          @updatedAt
+  customer              Customer          @relation(fields: [customerId], references: [id])
+  inquiry               Inquiry?          @relation("ProjectInquiry", fields: [inquiryId], references: [id])
+  convertedFromInquiry  Inquiry?          @relation("InquiryConvertedProject")
+  batches               ShipmentBatch[]
+  vehicleOrders         VehicleOrder[]
+  waybills              Waybill[]
+  dispatchRecords       DispatchRecord[]
+  cargoItems            CargoItem[]
+  abnormalEvents        AbnormalEvent[]
+  incomes               ProjectIncome[]
+  costs                 ProjectCost[]
+  receiptPayments       ReceiptPayment[]
+}
+
+model ShipmentBatch {
+  id                   String         @id @default(cuid())
+  batchNo              String         @unique
+  projectId            String
+  batchName            String
+  sequenceNo           Int            @default(1)
+  plannedVehicleCount  Int            @default(0)
+  actualVehicleCount   Int            @default(0)
+  batchStatus          BatchStatus    @default(PENDING)
+  loadingDate          DateTime?
+  departureDate        DateTime?
+  estimatedArrivalDate DateTime?
+  actualArrivalDate    DateTime?
+  remark               String?
+  createdBy            String?
+  createdAt            DateTime       @default(now())
+  updatedAt            DateTime       @updatedAt
+  project              Project        @relation(fields: [projectId], references: [id])
+  vehicleOrders        VehicleOrder[]
+  dispatchRecords      DispatchRecord[]
+  cargoItems           CargoItem[]
+  abnormalEvents       AbnormalEvent[]
+  costs                ProjectCost[]
+}
+
+model Supplier {
+  id             String          @id @default(cuid())
+  supplierCode   String          @unique
+  supplierName   String
+  contactName    String?
+  contactPhone   String?
+  country        String?
+  supplierType   String?
+  settlementType String?
+  rating         Int?
+  supplierStatus String?
+  remark         String?
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  vehicles       VehicleResource[]
+  drivers        Driver[]
+  vehicleOrders  VehicleOrder[]
+  costs          ProjectCost[]
+}
+
+model VehicleResource {
+  id            String          @id @default(cuid())
+  vehicleNo     String          @unique
+  vehicleType   String
+  vehicleLength Float?
+  vehicleWidth  Float?
+  maxLoadWeight Float?
+  ownerType     OwnerType       @default(OUTSOURCED)
+  supplierId    String?
+  vehicleStatus VehicleStatus   @default(AVAILABLE)
+  gpsDeviceNo   String?
+  remark        String?
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+  supplier      Supplier?       @relation(fields: [supplierId], references: [id])
+  vehicleOrders VehicleOrder[]
+  dispatches    DispatchRecord[]
+}
+
+model Driver {
+  id            String         @id @default(cuid())
+  driverName    String
+  driverPhone   String         @unique
+  idNo          String?
+  licenseNo     String?
+  nationality   String?
+  supplierId    String?
+  driverStatus  DriverStatus   @default(AVAILABLE)
+  remark        String?
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  supplier      Supplier?      @relation(fields: [supplierId], references: [id])
+  vehicleOrders VehicleOrder[]
+  dispatches    DispatchRecord[]
+}
+
+model VehicleOrder {
+  id                   String             @id @default(cuid())
+  vehicleOrderNo       String             @unique
+  projectId            String
+  batchId              String?
+  customerId           String
+  vehicleId            String?
+  driverId             String?
+  supplierId           String?
+  cargoName            String
+  cargoDescription     String?
+  loadAddress          String
+  unloadAddress        String
+  customsPort          String?
+  destinationCountry   String?
+  plannedDepartureTime DateTime?
+  actualDepartureTime  DateTime?
+  estimatedArrivalTime DateTime?
+  actualArrivalTime    DateTime?
+  currentNodeCode      String?
+  currentStatus        VehicleOrderStatus @default(PENDING_DISPATCH)
+  isAbnormal           Boolean            @default(false)
+  signStatus           SignStatus         @default(UNSIGNED)
+  remark               String?
+  createdBy            String?
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
+  project              Project            @relation(fields: [projectId], references: [id])
+  batch                ShipmentBatch?     @relation(fields: [batchId], references: [id])
+  customer             Customer           @relation(fields: [customerId], references: [id])
+  vehicle              VehicleResource?   @relation(fields: [vehicleId], references: [id])
+  driver               Driver?            @relation(fields: [driverId], references: [id])
+  supplier             Supplier?          @relation(fields: [supplierId], references: [id])
+  trackingNodes        TrackingNode[]
+  dispatchRecords      DispatchRecord[]
+  cargoItems           CargoItem[]
+  abnormalEvents       AbnormalEvent[]
+  costs                ProjectCost[]
+}
+
+model TrackingNode {
+  id             String       @id @default(cuid())
+  vehicleOrderId String
+  nodeCode       String
+  nodeName       String
+  nodeStatus     String
+  nodeTime       DateTime
+  locationText   String?
+  longitude      Float?
+  latitude       Float?
+  operatorType   OperatorType @default(SYSTEM)
+  operatorId     String?
+  photoUrls      String?      @default("[]")
+  remark         String?
+  createdAt      DateTime     @default(now())
+  vehicleOrder   VehicleOrder @relation(fields: [vehicleOrderId], references: [id])
+}
+
+model DispatchRecord {
+  id              String           @id @default(cuid())
+  dispatchNo      String           @unique
+  projectId       String
+  batchId         String?
+  vehicleOrderId  String
+  vehicleId       String?
+  driverId        String?
+  dispatcherId    String?
+  dispatchTime    DateTime
+  dispatchStatus  String
+  instructionText String?
+  remark          String?
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  project         Project          @relation(fields: [projectId], references: [id])
+  batch           ShipmentBatch?   @relation(fields: [batchId], references: [id])
+  vehicleOrder    VehicleOrder     @relation(fields: [vehicleOrderId], references: [id])
+  vehicle         VehicleResource? @relation(fields: [vehicleId], references: [id])
+  driver          Driver?          @relation(fields: [driverId], references: [id])
+}
+
+model CargoItem {
+  id             String         @id @default(cuid())
+  projectId      String
+  batchId        String?
+  vehicleOrderId String?
+  cargoName      String
+  packageType    String?
+  quantity       Int            @default(0)
+  unitWeight     Float?
+  totalWeight    Float?
+  length         Float?
+  width          Float?
+  height         Float?
+  isOversize     Boolean        @default(false)
+  isOverweight   Boolean        @default(false)
+  canSplit       Boolean        @default(true)
+  remark         String?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+  project        Project        @relation(fields: [projectId], references: [id])
+  batch          ShipmentBatch? @relation(fields: [batchId], references: [id])
+  vehicleOrder   VehicleOrder?  @relation(fields: [vehicleOrderId], references: [id])
+}
+
+model AbnormalEvent {
+  id             String         @id @default(cuid())
+  abnormalNo     String         @unique
+  projectId      String?
+  batchId        String?
+  vehicleOrderId String?
+  abnormalType   String
+  abnormalLevel  String
+  abnormalStatus AbnormalStatus @default(OPEN)
+  reportUserId   String?
+  reportTime     DateTime       @default(now())
+  locationText   String?
+  description    String
+  impactAmount   Float?
+  impactHours    Int?
+  solutionText   String?
+  closedBy       String?
+  closedTime     DateTime?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+  project        Project?       @relation(fields: [projectId], references: [id])
+  batch          ShipmentBatch? @relation(fields: [batchId], references: [id])
+  vehicleOrder   VehicleOrder?  @relation(fields: [vehicleOrderId], references: [id])
+}
+
+model ProjectIncome {
+  id           String   @id @default(cuid())
+  projectId    String
+  incomeType   String
+  amount       Float
+  currency     String   @default("CNY")
+  exchangeRate Float    @default(1)
+  remark       String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  project      Project  @relation(fields: [projectId], references: [id])
+}
+
+model ProjectCost {
+  id             String         @id @default(cuid())
+  projectId      String
+  batchId        String?
+  vehicleOrderId String?
+  costType       String
+  supplierId     String?
+  amount         Float
+  currency       String         @default("CNY")
+  exchangeRate   Float          @default(1)
+  taxRate        Float          @default(0)
+  taxAmount      Float          @default(0)
+  costStatus     String         @default("PENDING")
+  remark         String?
+  createdBy      String?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+  project        Project        @relation(fields: [projectId], references: [id])
+  batch          ShipmentBatch? @relation(fields: [batchId], references: [id])
+  vehicleOrder   VehicleOrder?  @relation(fields: [vehicleOrderId], references: [id])
+  supplier       Supplier?      @relation(fields: [supplierId], references: [id])
+}
+
+model ReceiptPayment {
+  id             String             @id @default(cuid())
+  projectId      String
+  relatedType    ReceiptPaymentType
+  relatedId      String?
+  amount         Float
+  currency       String             @default("CNY")
+  paymentStatus  String             @default("PENDING")
+  dueDate        DateTime?
+  paidDate       DateTime?
+  payerPayeeName String?
+  remark         String?
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+  project        Project            @relation(fields: [projectId], references: [id])
+}
+
+model SystemRole {
+  id         String       @id @default(cuid())
+  roleCode   String       @unique
+  roleName   String
+  roleStatus String       @default("ACTIVE")
+  remark     String?
+  createdAt  DateTime     @default(now())
+  updatedAt  DateTime     @updatedAt
+  users      SystemUser[]
+}
+
+model SystemUser {
+  id           String      @id @default(cuid())
+  username     String      @unique
+  passwordHash String
+  realName     String
+  mobile       String?
+  email        String?
+  departmentId String?
+  roleId       String?
+  userStatus   String      @default("ACTIVE")
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+  role         SystemRole? @relation(fields: [roleId], references: [id])
+}
+
+model OperationLog {
+  id           String   @id @default(cuid())
+  moduleName   String
+  businessId   String
+  actionType   String
+  operatorId   String?
+  operatorName String?
+  actionTime   DateTime @default(now())
+  beforeData   String?
+  afterData    String?
+  ipAddress    String?
+}
+
+model ApprovalRequest {
+  id            String                 @id @default(cuid())
+  approvalNo    String                 @unique
+  approvalType  String
+  relatedNo     String?
+  relatedId     String?
+  amount        Float                  @default(0)
+  applicantName String
+  approverName  String
+  status        ApprovalDecisionStatus @default(PENDING)
+  remark        String?
+  createdBy     String?
+  createdAt     DateTime               @default(now())
+  updatedAt     DateTime               @updatedAt
+}
+
+model PortDirectory {
+  id         String   @id @default(cuid())
+  portCode   String   @unique
+  portName   String
+  country    String
+  mode       String
+  status     String   @default("ACTIVE")
+  remark     String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}
+
+model Waybill {
+  id               String         @id @default(cuid())
+  waybillNo        String         @unique
+  customerId       String
+  projectId        String?
+  cargoName        String
+  cargoDescription String?
+  originPlace      String
+  destinationPlace String
+  portName         String?
+  declarationNo    String?
+  cmrNo            String?
+  cmrStatus        String?
+  status           WaybillStatus  @default(CREATED)
+  remark           String?
+  createdBy        String?
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+  customer         Customer       @relation(fields: [customerId], references: [id])
+  project          Project?       @relation(fields: [projectId], references: [id])
+  tasks            TaskExecution[]
+  customsRecords   CustomsRecord[]
+}
+
+model TaskExecution {
+  id                String      @id @default(cuid())
+  taskNo            String      @unique
+  waybillId         String
+  vehicleOrderId    String?
+  taskType          String
+  resourceName      String?
+  driverName        String?
+  routeText         String?
+  accessoriesSummary String?
+  status            TaskStatus  @default(PENDING)
+  remark            String?
+  createdBy         String?
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
+  waybill           Waybill     @relation(fields: [waybillId], references: [id])
+}
+
+model CustomsRecord {
+  id         String   @id @default(cuid())
+  recordNo   String   @unique
+  waybillId  String
+  recordType String
+  portName   String?
+  nodeName   String?
+  status     String   @default("处理中")
+  remark     String?
+  createdBy  String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  waybill    Waybill  @relation(fields: [waybillId], references: [id])
+}
+
+model OversizeCountryRule {
+  id                 String               @id @default(cuid())
+  countryCode        String               @unique
+  countryName        String
+  permitMode         OversizePermitMode   @default(AUTO)
+  maxTotalWeight     Float
+  maxAxleWeight      Float
+  maxLength          Float
+  maxWidth           Float
+  maxHeight          Float
+  manualReviewWeight Float                @default(80)
+  manualReviewWidth  Float                @default(3.5)
+  manualReviewHeight Float                @default(4.5)
+  escortWidth        Float?
+  escortWeight       Float?
+  permitLeadDays     Int                  @default(5)
+  currency           String               @default("USD")
+  riskHints          String               @default("[]")
+  createdAt          DateTime             @default(now())
+  updatedAt          DateTime             @updatedAt
+  feeRules           OversizeFeeRule[]
+  quotes             OversizeQuote[]
+}
+
+model OversizeFeeRule {
+  id            String              @id @default(cuid())
+  countryRuleId String
+  feeType       String
+  basis         String
+  rate          Float
+  unit          String?
+  minimumCharge Float?
+  manualOnly    Boolean             @default(false)
+  description   String?
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @updatedAt
+  countryRule   OversizeCountryRule @relation(fields: [countryRuleId], references: [id])
+}
+
+model OversizeQuote {
+  id                     String               @id @default(cuid())
+  quoteNo                String               @unique
+  inquiryId              String?
+  projectId              String?
+  countryRuleId          String
+  countryCode            String
+  countryName            String
+  originPlace            String
+  destinationPlace       String
+  routeDistanceKm        Float
+  vehicleType            String
+  axleCount              Int
+  axleWeightDistribution String               @default("[]")
+  cargoName              String?
+  cargoWeight            Float
+  cargoLength            Float
+  cargoWidth             Float
+  cargoHeight            Float
+  isIndivisible          Boolean              @default(true)
+  oversizeFlags          String               @default("[]")
+  riskFlags              String               @default("[]")
+  requiresPermit         Boolean              @default(false)
+  requiresEscort         Boolean              @default(false)
+  reviewStatus           OversizeReviewStatus @default(AUTO_APPROVED)
+  costBreakdown          String               @default("[]")
+  totalCost              Float                @default(0)
+  quotedPrice            Float?
+  currency               String               @default("USD")
+  permitLeadDays         Int?
+  remark                 String?
+  createdBy              String?
+  createdAt              DateTime             @default(now())
+  updatedAt              DateTime             @updatedAt
+  countryRule            OversizeCountryRule  @relation(fields: [countryRuleId], references: [id])
+}
+
+model TariffRateCache {
+  id                    String   @id @default(cuid())
+  cacheKey              String   @unique
+  destinationCountryCode String
+  originCountryCode     String?
+  hsCode                String
+  latestYear            Int
+  productDescription    String?
+  sourceProvider        String
+  reporterCode          String?
+  partnerCode           String?
+  nomenclatureCode      String?
+  nomenclatureName      String?
+  sourceLastUpdatedDate String?
+  tariffType            String?
+  simpleAverageRate     Float
+  minRate               Float?
+  maxRate               Float?
+  totalLines            Int?
+  mfnLines              Int?
+  preferentialLines     Int?
+  vatRate               Float    @default(0)
+  additionalTaxRate     Float    @default(0)
+  expiresAt             DateTime
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+}
+
+model TariffQueryHistory {
+  id                     String   @id @default(cuid())
+  destinationCountryCode String
+  destinationCountryName String
+  originCountryCode      String?
+  originCountryName      String?
+  hsCode                 String
+  productDescription     String?
+  currency               String   @default("USD")
+  invoiceValue           Float    @default(0)
+  freightCost            Float    @default(0)
+  insuranceCost          Float    @default(0)
+  customsValue           Float    @default(0)
+  dutyRate               Float    @default(0)
+  dutyAmount             Float    @default(0)
+  vatRate                Float    @default(0)
+  vatBase                Float    @default(0)
+  vatAmount              Float    @default(0)
+  additionalTaxLabel     String?
+  additionalTaxRate      Float    @default(0)
+  additionalTaxAmount    Float    @default(0)
+  totalTaxAmount         Float    @default(0)
+  landedCost             Float    @default(0)
+  queryYear              Int
+  dataSource             String
+  partnerCode            String?
+  cacheHit               Boolean  @default(false)
+  createdAt              DateTime @default(now())
+}

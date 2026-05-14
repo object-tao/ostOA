@@ -1,0 +1,11 @@
+name = "obiecrm-api"
+main = "src/index.ts"
+compatibility_date = "2026-05-12"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "obiecrm"
+database_id = "afee03da-8eb8-49e0-977e-4fb549cff106"
+
+[vars]
+CORS_ORIGIN = "https://admin.obiecrm.com,https://obiecrm-web.pages.dev,https://986c875b.obiecrm-web.pages.dev"
