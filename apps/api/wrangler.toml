@@ -7,5 +7,9 @@ binding = "DB"
 database_name = "ostoa"
 database_id = "afee03da-8eb8-49e0-977e-4fb549cff106"
 
+[[r2_buckets]]
+binding = "ASSETS"
+bucket_name = "ostoa-assets"
+
 [vars]
 CORS_ORIGIN = "https://ostoa.org,https://www.ostoa.org,https://ostoa-web.pages.dev"

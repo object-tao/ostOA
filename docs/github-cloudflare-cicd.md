@@ -2,12 +2,13 @@
 
 ## 架构
 
-- Web: Cloudflare Pages，推荐项目名 `ostoa-web`，绑定域名 `ostoa.org`
+- Web: Cloudflare Pages，项目名建议 `ostoa-web`，绑定域名 `ostoa.org`
 - API: Cloudflare Worker，名称 `ostoa-api`，绑定域名 `api.ostoa.org`
-- Database: Cloudflare D1，推荐数据库名 `ostoa`
+- Database: Cloudflare D1，数据库名建议 `ostoa`
+- File storage: Cloudflare R2，bucket 名建议 `ostoa-assets`
 - CI/CD: GitHub Actions
 
-## 需要你在 GitHub 配置的 Secrets
+## GitHub Secrets
 
 进入 `object-tao/ostOA` 仓库：
 
@@ -31,20 +32,20 @@
 
 1. 创建 Pages 项目，名称建议 `ostoa-web`。构建由 GitHub Actions 执行，不需要开启 Cloudflare 自带 GitHub 构建。
 2. 创建 D1 数据库，名称建议 `ostoa`。
-3. 把 D1 database id 写入 [wrangler.toml](C:/Users/Administrator/Documents/New%20project/apps/api/wrangler.toml) 的 `database_id`。
-4. 创建 Cloudflare API Token，权限至少包含：
+3. 创建 R2 bucket，名称建议 `ostoa-assets`，用于保存询单客户货物文件。
+4. 把 D1 database id 写入 [wrangler.toml](C:/Users/Administrator/Documents/New%20project/apps/api/wrangler.toml) 的 `database_id`。
+5. 创建 Cloudflare API Token，权限至少包含：
    - Account: Cloudflare Pages Edit
    - Account: Workers Scripts Edit
    - Account: D1 Edit
-   - Zone: DNS Edit，仅当你要自动或手动绑定自定义域时需要
+   - Account: R2 Edit
+   - Zone: DNS Edit，仅当你要绑定自定义域时需要
 
 ## 域名绑定
 
-域名已经在 Cloudflare 购买并托管，所以推荐这样绑定：
+域名已经在 Cloudflare 购买并托管，推荐这样绑定：
 
 ### Web 主站
-
-在 Cloudflare Dashboard：
 
 1. 打开 `Workers & Pages -> ostoa-web`
 2. 进入 `Custom domains`
@@ -53,12 +54,10 @@
 
 ### API
 
-在 Cloudflare Dashboard：
-
 1. 打开 `Workers & Pages -> ostoa-api`
 2. 进入 `Settings -> Domains & Routes`
 3. 添加自定义域 `api.ostoa.org`
-4. 确认 Worker 能访问 D1 binding `DB`
+4. 确认 Worker 能访问 D1 binding `DB` 和 R2 binding `ASSETS`
 
 当前 Worker CORS 已允许：
 
@@ -70,7 +69,7 @@
 
 1. 推送代码到 `https://github.com/object-tao/ostOA.git`
 2. 配置 GitHub Secrets
-3. 在 Cloudflare 创建 Pages 项目和 D1 数据库
+3. 在 Cloudflare 创建 Pages 项目、D1 数据库和 R2 bucket
 4. 更新 `apps/api/wrangler.toml` 的 `database_id`
 5. 在 GitHub Actions 手动运行 `Deploy API`
 6. 在 GitHub Actions 手动运行 `Deploy Web`

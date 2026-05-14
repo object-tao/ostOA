@@ -22,18 +22,23 @@ import {
   Table,
   Tag,
   Typography,
+  Upload,
   message,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
+import type { UploadFile } from 'antd/es/upload/interface';
 import {
   CheckCircleOutlined,
+  DownloadOutlined,
   FileTextOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
+  PaperClipOutlined,
   PlusOutlined,
   ReloadOutlined,
   RocketOutlined,
   TeamOutlined,
+  UploadOutlined,
 } from '@ant-design/icons';
 import { apiRequest } from './api/client';
 import { clearSession, getSessionUser, getToken, saveSession, type SessionUser } from './api/auth';
@@ -70,6 +75,14 @@ type TransportPlan = {
   createdAt: string;
 };
 
+type CargoFile = {
+  key?: string;
+  fileName: string;
+  fileType?: string;
+  fileSize?: number;
+  fileUrl: string;
+};
+
 type TransportInquiry = {
   id: string;
   inquiryNo: string;
@@ -89,6 +102,7 @@ type TransportInquiry = {
   customsMode?: string | null;
   temperatureRequirement?: string | null;
   specialRequirement?: string | null;
+  cargoFiles?: CargoFile[];
   status: string;
   createdAt: string;
   updatedAt: string;
@@ -112,6 +126,29 @@ function dateText(value?: string | null) {
     return '-';
   }
   return value.slice(0, 10);
+}
+
+function fileSizeText(value?: number) {
+  if (!value) {
+    return '-';
+  }
+  if (value < 1024 * 1024) {
+    return `${Math.round(value / 1024)} KB`;
+  }
+  return `${(value / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function fileUrl(value: string) {
+  if (value.startsWith('http')) {
+    return value;
+  }
+  const configuredApiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? 'http://127.0.0.1:8787';
+  const isLocalBrowser =
+    typeof window !== 'undefined' &&
+    (window.location.hostname === '127.0.0.1' ||
+      window.location.hostname === 'localhost' ||
+      window.location.hostname.startsWith('192.168.'));
+  return isLocalBrowser ? value : `${configuredApiBaseUrl}${value}`;
 }
 
 export default function App() {
@@ -189,13 +226,30 @@ export default function App() {
     setPlans([]);
   };
 
-  const createInquiry = async (values: Partial<TransportInquiry>) => {
+  const uploadCargoFiles = async (files: UploadFile[] = []) => {
+    const uploaded: CargoFile[] = [];
+    for (const item of files) {
+      if (!item.originFileObj) {
+        continue;
+      }
+      const formData = new FormData();
+      formData.append('file', item.originFileObj);
+      formData.append('folder', 'transport-inquiries');
+      uploaded.push(await apiRequest<CargoFile>('/api/uploads', { method: 'POST', body: formData }));
+    }
+    return uploaded;
+  };
+
+  const createInquiry = async (values: Partial<TransportInquiry> & { cargoUploadFiles?: UploadFile[] }) => {
     const customer = customers.find((item) => item.id === values.customerId);
     try {
+      const cargoFiles = await uploadCargoFiles(values.cargoUploadFiles);
       await apiRequest<TransportInquiry>('/api/transport-inquiries', {
         method: 'POST',
         body: JSON.stringify({
           ...values,
+          cargoUploadFiles: undefined,
+          cargoFiles,
           customerName: values.customerName || customer?.shortName || customer?.name,
         }),
       });
@@ -247,6 +301,7 @@ export default function App() {
     { title: '货物', dataIndex: 'cargoName' },
     { title: '线路', render: (_, row) => `${row.origin} -> ${row.destination}` },
     { title: '重量/体积', render: (_, row) => `${row.weightKg ?? '-'} kg / ${row.volumeCbm ?? '-'} m3` },
+    { title: '文件', render: (_, row) => <Tag icon={<PaperClipOutlined />}>{row.cargoFiles?.length ?? 0}</Tag> },
     { title: '期望到达', render: (_, row) => dateText(row.targetArrivalDate) },
     { title: '状态', render: (_, row) => statusTag(row.status) },
     {
@@ -548,6 +603,17 @@ export default function App() {
           <Form.Item name="specialRequirement" label="特殊要求">
             <TextArea rows={4} placeholder="时效、口岸偏好、装卸限制、保险、目的国清关要求等" />
           </Form.Item>
+          <Form.Item
+            name="cargoUploadFiles"
+            label="客户货物文件"
+            valuePropName="fileList"
+            getValueFromEvent={(event) => event?.fileList ?? []}
+            extra="支持上传客户原始询价单、货物清单、装箱资料、图片、PDF、Excel、Word 等文件。"
+          >
+            <Upload beforeUpload={() => false} multiple>
+              <Button icon={<UploadOutlined />}>选择文件</Button>
+            </Upload>
+          </Form.Item>
           <Button type="primary" htmlType="submit" block>
             保存询单
           </Button>
@@ -578,6 +644,37 @@ export default function App() {
                 {selectedInquiry.specialRequirement || '-'}
               </Descriptions.Item>
             </Descriptions>
+            <Card className="glass-card" title="客户货物文件" bordered={false}>
+              {selectedInquiry.cargoFiles?.length ? (
+                <List
+                  dataSource={selectedInquiry.cargoFiles}
+                  renderItem={(item) => (
+                    <List.Item
+                      actions={[
+                        <Button
+                          key="open"
+                          type="link"
+                          icon={<DownloadOutlined />}
+                          href={fileUrl(item.fileUrl)}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          打开
+                        </Button>,
+                      ]}
+                    >
+                      <List.Item.Meta
+                        avatar={<PaperClipOutlined />}
+                        title={item.fileName}
+                        description={`${item.fileType || '未知类型'} · ${fileSizeText(item.fileSize)}`}
+                      />
+                    </List.Item>
+                  )}
+                />
+              ) : (
+                <Empty description="暂无客户货物文件" />
+              )}
+            </Card>
             <Button
               type="primary"
               icon={<RocketOutlined />}

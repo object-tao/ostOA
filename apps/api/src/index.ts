@@ -142,6 +142,13 @@ type TransportInquiryPayload = {
   customsMode?: string;
   temperatureRequirement?: string;
   specialRequirement?: string;
+  cargoFiles?: Array<{
+    key?: string;
+    fileName?: string;
+    fileType?: string;
+    fileSize?: number;
+    fileUrl?: string;
+  }>;
 };
 
 type TransportPlanPayload = {
@@ -465,6 +472,7 @@ function normalizeTransportInquiry(row: Record<string, unknown>) {
     customsMode: row.customsMode,
     temperatureRequirement: row.temperatureRequirement,
     specialRequirement: row.specialRequirement,
+    cargoFiles: jsonArray(row.cargoFiles as string | null),
     status: row.status,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
@@ -494,6 +502,7 @@ async function listTransportInquiries(env: Env) {
         transport_inquiries.customs_mode as customsMode,
         transport_inquiries.temperature_requirement as temperatureRequirement,
         transport_inquiries.special_requirement as specialRequirement,
+        transport_inquiries.cargo_files as cargoFiles,
         transport_inquiries.status,
         transport_inquiries.created_at as createdAt,
         transport_inquiries.updated_at as updatedAt,
@@ -558,8 +567,8 @@ async function createTransportInquiry(env: Env, body: TransportInquiryPayload) {
       INSERT INTO transport_inquiries (
         id, inquiry_no, customer_id, customer_name, contact_name, contact_phone, cargo_name, cargo_type,
         origin, destination, weight_kg, volume_cbm, package_count, ready_date, target_arrival_date,
-        customs_mode, temperature_requirement, special_requirement, status, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        customs_mode, temperature_requirement, special_requirement, cargo_files, status, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `,
   )
     .bind(
@@ -581,6 +590,7 @@ async function createTransportInquiry(env: Env, body: TransportInquiryPayload) {
       ensureString(body.customsMode) || '一般贸易',
       ensureString(body.temperatureRequirement) || '常温',
       ensureString(body.specialRequirement),
+      JSON.stringify(body.cargoFiles ?? []),
       'NEW',
       now,
       now,
