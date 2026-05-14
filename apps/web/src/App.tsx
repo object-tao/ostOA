@@ -381,7 +381,14 @@ export default function App() {
 
   return (
     <Layout className="crm-shell">
-      <Sider width={250} collapsible collapsed={siderCollapsed} trigger={null} className="crm-sider">
+      <Sider
+        width={250}
+        collapsedWidth={88}
+        collapsible
+        collapsed={siderCollapsed}
+        trigger={null}
+        className={`crm-sider ${siderCollapsed ? 'crm-sider-collapsed' : ''}`}
+      >
         <div className="sidebar-brand-row">
           <div className="brand-lockup brand-lockup-sidebar">
             <div className="brand-mark">T</div>
@@ -405,6 +412,7 @@ export default function App() {
         <Menu
           mode="inline"
           selectedKeys={[activeSection]}
+          inlineCollapsed={siderCollapsed}
           onClick={(event) => setActiveSection(event.key as SectionKey)}
           items={[
             { key: 'inquiries', icon: <FileTextOutlined />, label: '询单管理' },
