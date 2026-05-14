@@ -19,6 +19,7 @@ import {
   Select,
   Space,
   Statistic,
+  Switch,
   Table,
   Tag,
   Typography,
@@ -30,6 +31,7 @@ import type { UploadFile } from 'antd/es/upload/interface';
 import {
   CheckCircleOutlined,
   DownloadOutlined,
+  EditOutlined,
   FileTextOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
@@ -37,6 +39,7 @@ import {
   PlusOutlined,
   ReloadOutlined,
   RocketOutlined,
+  SettingOutlined,
   TeamOutlined,
   UploadOutlined,
 } from '@ant-design/icons';
@@ -47,7 +50,7 @@ const { Header, Content, Sider } = Layout;
 const { Title, Text, Paragraph } = Typography;
 const { TextArea } = Input;
 
-type SectionKey = 'inquiries' | 'plans';
+type SectionKey = 'inquiries' | 'plans' | 'baseInfo';
 
 type Customer = {
   id: string;
@@ -56,6 +59,20 @@ type Customer = {
   phone?: string | null;
   email?: string | null;
   region?: string | null;
+};
+
+type Employee = {
+  id: string;
+  name: string;
+  phone?: string | null;
+  email?: string | null;
+  department?: string | null;
+  position?: string | null;
+  isSalesperson: boolean;
+  status: string;
+  notes?: string | null;
+  createdAt: string;
+  updatedAt: string;
 };
 
 type TransportPlan = {
@@ -156,18 +173,22 @@ export default function App() {
   const [loginForm] = Form.useForm();
   const [inquiryForm] = Form.useForm();
   const [planForm] = Form.useForm();
+  const [employeeForm] = Form.useForm();
   const [sessionUser, setSessionUser] = useState<SessionUser | null>(getSessionUser());
   const [activeSection, setActiveSection] = useState<SectionKey>('inquiries');
   const [siderCollapsed, setSiderCollapsed] = useState(false);
   const [loading, setLoading] = useState(Boolean(getToken()));
   const [loginLoading, setLoginLoading] = useState(false);
   const [customers, setCustomers] = useState<Customer[]>([]);
+  const [employees, setEmployees] = useState<Employee[]>([]);
   const [inquiries, setInquiries] = useState<TransportInquiry[]>([]);
   const [plans, setPlans] = useState<TransportPlan[]>([]);
   const [inquiryDrawerOpen, setInquiryDrawerOpen] = useState(false);
   const [detailDrawerOpen, setDetailDrawerOpen] = useState(false);
   const [planModalOpen, setPlanModalOpen] = useState(false);
+  const [employeeModalOpen, setEmployeeModalOpen] = useState(false);
   const [selectedInquiry, setSelectedInquiry] = useState<TransportInquiry | null>(null);
+  const [editingEmployee, setEditingEmployee] = useState<Employee | null>(null);
 
   const stats = useMemo(() => {
     const waiting = inquiries.filter((item) => item.status === 'NEW').length;
@@ -179,17 +200,24 @@ export default function App() {
     };
   }, [inquiries, plans]);
 
+  const salespeople = useMemo(
+    () => employees.filter((item) => item.isSalesperson && item.status === 'ACTIVE'),
+    [employees],
+  );
+
   const loadData = async () => {
     setLoading(true);
     try {
-      const [customerRes, inquiryRes, planRes] = await Promise.all([
+      const [customerRes, inquiryRes, planRes, employeeRes] = await Promise.all([
         apiRequest<{ items: Customer[] }>('/api/customers'),
         apiRequest<{ items: TransportInquiry[] }>('/api/transport-inquiries'),
         apiRequest<{ items: TransportPlan[] }>('/api/transport-plans'),
+        apiRequest<{ items: Employee[] }>('/api/employees'),
       ]);
       setCustomers(customerRes.items ?? []);
       setInquiries(inquiryRes.items ?? []);
       setPlans(planRes.items ?? []);
+      setEmployees(employeeRes.items ?? []);
     } catch (error) {
       message.error((error as Error).message);
     } finally {
@@ -282,6 +310,41 @@ export default function App() {
     }
   };
 
+  const openEmployeeModal = (record?: Employee) => {
+    setEditingEmployee(record ?? null);
+    employeeForm.setFieldsValue(
+      record ?? {
+        status: 'ACTIVE',
+        isSalesperson: false,
+      },
+    );
+    setEmployeeModalOpen(true);
+  };
+
+  const saveEmployee = async (values: Partial<Employee>) => {
+    try {
+      if (editingEmployee) {
+        await apiRequest(`/api/employees/${editingEmployee.id}`, {
+          method: 'PUT',
+          body: JSON.stringify(values),
+        });
+        message.success('员工信息已更新');
+      } else {
+        await apiRequest('/api/employees', {
+          method: 'POST',
+          body: JSON.stringify(values),
+        });
+        message.success('员工已创建');
+      }
+      setEmployeeModalOpen(false);
+      setEditingEmployee(null);
+      employeeForm.resetFields();
+      await loadData();
+    } catch (error) {
+      message.error((error as Error).message);
+    }
+  };
+
   const openDetail = (record: TransportInquiry) => {
     setSelectedInquiry(record);
     setDetailDrawerOpen(true);
@@ -338,6 +401,36 @@ export default function App() {
     { title: '预估费用', render: (_, row) => `${row.estimatedCost} ${row.currency}` },
     { title: '状态', render: (_, row) => <Tag color="blue">{row.status}</Tag> },
   ];
+
+  const employeeColumns: ColumnsType<Employee> = [
+    { title: '姓名', dataIndex: 'name' },
+    { title: '部门', render: (_, row) => row.department || '-' },
+    { title: '岗位', render: (_, row) => row.position || '-' },
+    { title: '电话', render: (_, row) => row.phone || '-' },
+    { title: '邮箱', render: (_, row) => row.email || '-' },
+    {
+      title: '业务员',
+      render: (_, row) => (row.isSalesperson ? <Tag color="blue">是</Tag> : <Tag>否</Tag>),
+    },
+    {
+      title: '状态',
+      render: (_, row) => <Tag color={row.status === 'ACTIVE' ? 'green' : 'default'}>{row.status === 'ACTIVE' ? '启用' : '停用'}</Tag>,
+    },
+    {
+      title: '操作',
+      render: (_, row) => (
+        <Button type="link" icon={<EditOutlined />} onClick={() => openEmployeeModal(row)}>
+          编辑
+        </Button>
+      ),
+    },
+  ];
+
+  const sectionTitle: Record<SectionKey, string> = {
+    inquiries: '询单管理',
+    plans: '生成方案',
+    baseInfo: '基础信息',
+  };
 
   if (!sessionUser) {
     return (
@@ -419,6 +512,7 @@ export default function App() {
           items={[
             { key: 'inquiries', icon: <FileTextOutlined />, label: '询单管理' },
             { key: 'plans', icon: <RocketOutlined />, label: '生成方案' },
+            { key: 'baseInfo', icon: <SettingOutlined />, label: '基础信息' },
           ]}
         />
         <div className="sidebar-user">
@@ -444,16 +538,22 @@ export default function App() {
           <div>
             <Text className="eyebrow">Central Asia Transport</Text>
             <Title level={2} style={{ margin: 0 }}>
-              {activeSection === 'inquiries' ? '询单管理' : '生成方案'}
+              {sectionTitle[activeSection]}
             </Title>
           </div>
           <Space>
             <Button icon={<ReloadOutlined />} onClick={() => void loadData()} loading={loading}>
               刷新
             </Button>
-            <Button type="primary" icon={<PlusOutlined />} onClick={() => setInquiryDrawerOpen(true)}>
-              新建询单
-            </Button>
+            {activeSection === 'baseInfo' ? (
+              <Button type="primary" icon={<PlusOutlined />} onClick={() => openEmployeeModal()}>
+                新增员工
+              </Button>
+            ) : (
+              <Button type="primary" icon={<PlusOutlined />} onClick={() => setInquiryDrawerOpen(true)}>
+                新建询单
+              </Button>
+            )}
           </Space>
         </Header>
 
@@ -493,7 +593,7 @@ export default function App() {
                   pagination={{ pageSize: 8 }}
                 />
               </Card>
-            ) : (
+            ) : activeSection === 'plans' ? (
               <Card className="glass-card" title="运输方案库" bordered={false}>
                 <Table
                   rowKey="id"
@@ -506,6 +606,25 @@ export default function App() {
                     ),
                   }}
                   pagination={{ pageSize: 8 }}
+                />
+              </Card>
+            ) : (
+              <Card
+                className="glass-card"
+                title="员工与业务员"
+                bordered={false}
+                extra={
+                  <Button type="primary" icon={<PlusOutlined />} onClick={() => openEmployeeModal()}>
+                    新增员工
+                  </Button>
+                }
+              >
+                <Table
+                  rowKey="id"
+                  loading={loading}
+                  dataSource={employees}
+                  columns={employeeColumns}
+                  pagination={{ pageSize: 10 }}
                 />
               </Card>
             )}
@@ -538,7 +657,13 @@ export default function App() {
             <Input placeholder="可直接填写临时客户" />
           </Form.Item>
           <Form.Item name="salesperson" label="业务员">
-            <Input placeholder="负责该询单的业务员姓名" />
+            <Select
+              showSearch
+              allowClear
+              optionFilterProp="label"
+              placeholder="选择负责该询单的业务员"
+              options={salespeople.map((item) => ({ value: item.name, label: item.name }))}
+            />
           </Form.Item>
           <Row gutter={12}>
             <Col span={12}>
@@ -766,6 +891,69 @@ export default function App() {
           </Row>
           <Form.Item name="planText" label="方案说明">
             <TextArea rows={5} placeholder="不填则自动生成操作节点、风险提示和费用说明" />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
+        title={editingEmployee ? '编辑员工' : '新增员工'}
+        open={employeeModalOpen}
+        onCancel={() => {
+          setEmployeeModalOpen(false);
+          setEditingEmployee(null);
+          employeeForm.resetFields();
+        }}
+        onOk={() => employeeForm.submit()}
+        okText="保存"
+        width={620}
+      >
+        <Form form={employeeForm} layout="vertical" onFinish={(values) => void saveEmployee(values)}>
+          <Row gutter={12}>
+            <Col span={12}>
+              <Form.Item name="name" label="姓名" rules={[{ required: true, message: '请输入员工姓名' }]}>
+                <Input />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item name="phone" label="电话">
+                <Input />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Form.Item name="email" label="邮箱">
+            <Input />
+          </Form.Item>
+          <Row gutter={12}>
+            <Col span={12}>
+              <Form.Item name="department" label="部门">
+                <Input placeholder="如：业务部、操作部、财务部" />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item name="position" label="岗位">
+                <Input placeholder="如：业务员、操作、经理" />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Row gutter={12}>
+            <Col span={12}>
+              <Form.Item name="isSalesperson" label="是否业务员" valuePropName="checked">
+                <Switch checkedChildren="是" unCheckedChildren="否" />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item name="status" label="状态" initialValue="ACTIVE">
+                <Select
+                  options={[
+                    { value: 'ACTIVE', label: '启用' },
+                    { value: 'INACTIVE', label: '停用' },
+                  ]}
+                />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Form.Item name="notes" label="备注">
+            <TextArea rows={3} />
           </Form.Item>
         </Form>
       </Modal>

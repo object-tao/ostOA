@@ -125,6 +125,17 @@ type ProductPayload = {
   notes?: string;
 };
 
+type EmployeePayload = {
+  name?: string;
+  phone?: string;
+  email?: string;
+  department?: string;
+  position?: string;
+  isSalesperson?: boolean;
+  status?: string;
+  notes?: string;
+};
+
 type TransportInquiryPayload = {
   customerId?: string;
   customerName?: string;
@@ -420,6 +431,111 @@ async function listProductsForCustomers(env: Env, customerIds: string[]) {
   }
 
   return grouped;
+}
+
+async function listEmployees(env: Env, salespeopleOnly = false) {
+  const rows = await env.DB.prepare(
+    `
+      SELECT
+        id,
+        name,
+        phone,
+        email,
+        department,
+        position,
+        is_salesperson as isSalesperson,
+        status,
+        notes,
+        created_at as createdAt,
+        updated_at as updatedAt
+      FROM employees
+      ${salespeopleOnly ? "WHERE is_salesperson = 1 AND status = 'ACTIVE'" : ''}
+      ORDER BY status ASC, is_salesperson DESC, department ASC, name ASC
+    `,
+  ).all<Record<string, unknown>>();
+
+  return rows.results.map((row) => ({
+    ...row,
+    isSalesperson: Boolean(row.isSalesperson),
+  }));
+}
+
+async function createEmployee(env: Env, body: EmployeePayload) {
+  const name = ensureString(body.name);
+  if (!name) {
+    return { error: '员工姓名不能为空。' };
+  }
+
+  const id = createId('emp');
+  const now = isoNow();
+  await env.DB.prepare(
+    `
+      INSERT INTO employees (
+        id, name, phone, email, department, position, is_salesperson, status, notes, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `,
+  )
+    .bind(
+      id,
+      name,
+      ensureString(body.phone),
+      ensureString(body.email),
+      ensureString(body.department),
+      ensureString(body.position),
+      body.isSalesperson ? 1 : 0,
+      ensureString(body.status) || 'ACTIVE',
+      ensureString(body.notes),
+      now,
+      now,
+    )
+    .run();
+
+  await recordActivity(env, '新增员工', `新增基础信息员工 ${name}。`);
+  return { id };
+}
+
+async function updateEmployee(env: Env, employeeId: string, body: EmployeePayload) {
+  const existing = await env.DB.prepare('SELECT id FROM employees WHERE id = ?').bind(employeeId).first();
+  if (!existing) {
+    return { error: '员工不存在。' };
+  }
+
+  const name = ensureString(body.name);
+  if (!name) {
+    return { error: '员工姓名不能为空。' };
+  }
+
+  await env.DB.prepare(
+    `
+      UPDATE employees
+      SET name = ?,
+          phone = ?,
+          email = ?,
+          department = ?,
+          position = ?,
+          is_salesperson = ?,
+          status = ?,
+          notes = ?,
+          updated_at = ?
+      WHERE id = ?
+    `,
+  )
+    .bind(
+      name,
+      ensureString(body.phone),
+      ensureString(body.email),
+      ensureString(body.department),
+      ensureString(body.position),
+      body.isSalesperson ? 1 : 0,
+      ensureString(body.status) || 'ACTIVE',
+      ensureString(body.notes),
+      isoNow(),
+      employeeId,
+    )
+    .run();
+
+  await recordActivity(env, '更新员工', `更新基础信息员工 ${name}。`);
+  return { ok: true };
 }
 
 function toNumber(value: unknown) {
@@ -1817,6 +1933,31 @@ export default {
 
     if (url.pathname === '/api/transport-plans' && request.method === 'GET') {
       return json({ items: await listTransportPlans(env) }, { status: 200 }, origin);
+    }
+
+    if (url.pathname === '/api/employees' && request.method === 'GET') {
+      return json({ items: await listEmployees(env) }, { status: 200 }, origin);
+    }
+
+    if (url.pathname === '/api/salespeople' && request.method === 'GET') {
+      return json({ items: await listEmployees(env, true) }, { status: 200 }, origin);
+    }
+
+    if (url.pathname === '/api/employees' && request.method === 'POST') {
+      const result = await createEmployee(env, await parseBody<EmployeePayload>(request));
+      if (result.error !== undefined) {
+        return badRequest(origin, result.error);
+      }
+      return json(result, { status: 201 }, origin);
+    }
+
+    const employeeMatch = url.pathname.match(/^\/api\/employees\/([^/]+)$/);
+    if (employeeMatch && request.method === 'PUT') {
+      const result = await updateEmployee(env, employeeMatch[1], await parseBody<EmployeePayload>(request));
+      if (result.error !== undefined) {
+        return badRequest(origin, result.error);
+      }
+      return json(result, { status: 200 }, origin);
     }
 
     if (url.pathname === '/api/customers' && request.method === 'GET') {
