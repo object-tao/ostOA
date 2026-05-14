@@ -163,6 +163,22 @@ type TransportInquiryPayload = {
   }>;
 };
 
+type InquiryFilePayload = {
+  key?: string;
+  fileName?: string;
+  fileType?: string;
+  fileSize?: number;
+  fileUrl?: string;
+};
+
+type QuoteTransportInquiryPayload = {
+  quoteAmount?: number | string | null;
+  quoteCurrency?: string;
+  quoteRemark?: string;
+  quoteFiles?: InquiryFilePayload[];
+  solutionFiles?: InquiryFilePayload[];
+};
+
 type TransportPlanPayload = {
   title?: string;
   route?: string;
@@ -591,6 +607,12 @@ function normalizeTransportInquiry(row: Record<string, unknown>) {
     temperatureRequirement: row.temperatureRequirement,
     specialRequirement: row.specialRequirement,
     cargoFiles: jsonArray(row.cargoFiles as string | null),
+    quoteAmount: row.quoteAmount,
+    quoteCurrency: row.quoteCurrency,
+    quoteRemark: row.quoteRemark,
+    quoteFiles: jsonArray(row.quoteFiles as string | null),
+    solutionFiles: jsonArray(row.solutionFiles as string | null),
+    quotedAt: row.quotedAt,
     status: row.status,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
@@ -622,6 +644,12 @@ async function listTransportInquiries(env: Env) {
         transport_inquiries.temperature_requirement as temperatureRequirement,
         transport_inquiries.special_requirement as specialRequirement,
         transport_inquiries.cargo_files as cargoFiles,
+        transport_inquiries.quote_amount as quoteAmount,
+        transport_inquiries.quote_currency as quoteCurrency,
+        transport_inquiries.quote_remark as quoteRemark,
+        transport_inquiries.quote_files as quoteFiles,
+        transport_inquiries.solution_files as solutionFiles,
+        transport_inquiries.quoted_at as quotedAt,
         transport_inquiries.status,
         transport_inquiries.created_at as createdAt,
         transport_inquiries.updated_at as updatedAt,
@@ -719,6 +747,129 @@ async function createTransportInquiry(env: Env, body: TransportInquiryPayload) {
 
   await recordActivity(env, '新建运输询单', `${customerName}：${origin} -> ${destination}，货物：${cargoName}`);
   return { id };
+}
+
+async function updateTransportInquiry(env: Env, inquiryId: string, body: TransportInquiryPayload) {
+  const existing = await getTransportInquiry(env, inquiryId);
+  if (!existing) {
+    return { error: '询单不存在。' };
+  }
+
+  const customerId = ensureString(body.customerId);
+  let customerName = ensureString(body.customerName);
+  if (customerId && !customerName) {
+    const customer = await env.DB.prepare('SELECT name FROM customers WHERE id = ?').bind(customerId).first<{ name: string }>();
+    customerName = customer?.name ?? '';
+  }
+
+  const cargoName = ensureString(body.cargoName);
+  const origin = ensureString(body.origin);
+  const destination = ensureString(body.destination);
+  if (!customerName || !cargoName || !origin || !destination) {
+    return { error: '客户、货物、起运地和目的地不能为空。' };
+  }
+
+  await env.DB.prepare(
+    `
+      UPDATE transport_inquiries
+      SET customer_id = ?,
+          customer_name = ?,
+          salesperson = ?,
+          contact_name = ?,
+          contact_phone = ?,
+          cargo_name = ?,
+          cargo_type = ?,
+          origin = ?,
+          destination = ?,
+          weight_kg = ?,
+          volume_cbm = ?,
+          package_count = ?,
+          ready_date = ?,
+          target_arrival_date = ?,
+          customs_mode = ?,
+          temperature_requirement = ?,
+          special_requirement = ?,
+          cargo_files = ?,
+          updated_at = ?
+      WHERE id = ?
+    `,
+  )
+    .bind(
+      customerId || null,
+      customerName,
+      ensureString(body.salesperson),
+      ensureString(body.contactName),
+      ensureString(body.contactPhone),
+      cargoName,
+      ensureString(body.cargoType) || '普货',
+      origin,
+      destination,
+      toNumber(body.weightKg),
+      toNumber(body.volumeCbm),
+      toInteger(body.packageCount),
+      ensureString(body.readyDate),
+      ensureString(body.targetArrivalDate),
+      ensureString(body.customsMode) || '一般贸易',
+      ensureString(body.temperatureRequirement) || '常温',
+      ensureString(body.specialRequirement),
+      JSON.stringify(body.cargoFiles ?? existing.cargoFiles ?? []),
+      isoNow(),
+      inquiryId,
+    )
+    .run();
+
+  await recordActivity(env, '更新运输询单', `${customerName}：${origin} -> ${destination}，货物：${cargoName}`);
+  return { ok: true };
+}
+
+async function deleteTransportInquiry(env: Env, inquiryId: string) {
+  const existing = await getTransportInquiry(env, inquiryId);
+  if (!existing) {
+    return { error: '询单不存在。' };
+  }
+
+  await env.DB.prepare('DELETE FROM transport_plans WHERE inquiry_id = ?').bind(inquiryId).run();
+  await env.DB.prepare('DELETE FROM transport_inquiries WHERE id = ?').bind(inquiryId).run();
+  await recordActivity(env, '删除运输询单', `删除询单 ${existing.inquiryNo}。`);
+  return { ok: true };
+}
+
+async function quoteTransportInquiry(env: Env, inquiryId: string, body: QuoteTransportInquiryPayload) {
+  const existing = await getTransportInquiry(env, inquiryId);
+  if (!existing) {
+    return { error: '询单不存在。' };
+  }
+
+  const now = isoNow();
+  await env.DB.prepare(
+    `
+      UPDATE transport_inquiries
+      SET quote_amount = ?,
+          quote_currency = ?,
+          quote_remark = ?,
+          quote_files = ?,
+          solution_files = ?,
+          quoted_at = ?,
+          status = ?,
+          updated_at = ?
+      WHERE id = ?
+    `,
+  )
+    .bind(
+      toNumber(body.quoteAmount),
+      ensureString(body.quoteCurrency) || 'USD',
+      ensureString(body.quoteRemark),
+      JSON.stringify(body.quoteFiles ?? []),
+      JSON.stringify(body.solutionFiles ?? []),
+      now,
+      'QUOTED',
+      now,
+      inquiryId,
+    )
+    .run();
+
+  await recordActivity(env, '完成报价', `询单 ${existing.inquiryNo} 已完成报价。`);
+  return { ok: true };
 }
 
 function buildGeneratedPlan(inquiry: Awaited<ReturnType<typeof getTransportInquiry>>, override: TransportPlanPayload = {}) {
@@ -1916,6 +2067,39 @@ export default {
         return notFound(origin, 'Transport inquiry not found.');
       }
       return json(item, { status: 200 }, origin);
+    }
+
+    if (transportInquiryMatch && request.method === 'PUT') {
+      const result = await updateTransportInquiry(
+        env,
+        transportInquiryMatch[1],
+        await parseBody<TransportInquiryPayload>(request),
+      );
+      if (result.error !== undefined) {
+        return badRequest(origin, result.error);
+      }
+      return json(await getTransportInquiry(env, transportInquiryMatch[1]), { status: 200 }, origin);
+    }
+
+    if (transportInquiryMatch && request.method === 'DELETE') {
+      const result = await deleteTransportInquiry(env, transportInquiryMatch[1]);
+      if (result.error !== undefined) {
+        return badRequest(origin, result.error);
+      }
+      return json(result, { status: 200 }, origin);
+    }
+
+    const transportQuoteMatch = url.pathname.match(/^\/api\/transport-inquiries\/([^/]+)\/quote$/);
+    if (transportQuoteMatch && request.method === 'POST') {
+      const result = await quoteTransportInquiry(
+        env,
+        transportQuoteMatch[1],
+        await parseBody<QuoteTransportInquiryPayload>(request),
+      );
+      if (result.error !== undefined) {
+        return badRequest(origin, result.error);
+      }
+      return json(await getTransportInquiry(env, transportQuoteMatch[1]), { status: 200 }, origin);
     }
 
     const transportPlanGenerateMatch = url.pathname.match(/^\/api\/transport-inquiries\/([^/]+)\/generate-plan$/);

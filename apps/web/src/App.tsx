@@ -15,6 +15,7 @@ import {
   List,
   Menu,
   Modal,
+  Popconfirm,
   Row,
   Select,
   Space,
@@ -121,6 +122,12 @@ type TransportInquiry = {
   temperatureRequirement?: string | null;
   specialRequirement?: string | null;
   cargoFiles?: CargoFile[];
+  quoteAmount?: number | null;
+  quoteCurrency?: string | null;
+  quoteRemark?: string | null;
+  quoteFiles?: CargoFile[];
+  solutionFiles?: CargoFile[];
+  quotedAt?: string | null;
   status: string;
   createdAt: string;
   updatedAt: string;
@@ -130,6 +137,7 @@ type TransportInquiry = {
 const statusMeta: Record<string, { text: string; color: string }> = {
   NEW: { text: '待生成方案', color: 'gold' },
   PLAN_READY: { text: '方案已生成', color: 'green' },
+  QUOTED: { text: '完成报价', color: 'blue' },
   CONFIRMED: { text: '客户已确认', color: 'blue' },
   CLOSED: { text: '已关闭', color: 'default' },
 };
@@ -173,6 +181,7 @@ export default function App() {
   const [loginForm] = Form.useForm();
   const [inquiryForm] = Form.useForm();
   const [planForm] = Form.useForm();
+  const [quoteForm] = Form.useForm();
   const [employeeForm] = Form.useForm();
   const [sessionUser, setSessionUser] = useState<SessionUser | null>(getSessionUser());
   const [activeSection, setActiveSection] = useState<SectionKey>('inquiries');
@@ -186,8 +195,10 @@ export default function App() {
   const [inquiryDrawerOpen, setInquiryDrawerOpen] = useState(false);
   const [detailDrawerOpen, setDetailDrawerOpen] = useState(false);
   const [planModalOpen, setPlanModalOpen] = useState(false);
+  const [quoteModalOpen, setQuoteModalOpen] = useState(false);
   const [employeeModalOpen, setEmployeeModalOpen] = useState(false);
   const [selectedInquiry, setSelectedInquiry] = useState<TransportInquiry | null>(null);
+  const [editingInquiry, setEditingInquiry] = useState<TransportInquiry | null>(null);
   const [editingEmployee, setEditingEmployee] = useState<Employee | null>(null);
 
   const stats = useMemo(() => {
@@ -269,22 +280,50 @@ export default function App() {
     return uploaded;
   };
 
-  const createInquiry = async (values: Partial<TransportInquiry> & { cargoUploadFiles?: UploadFile[] }) => {
+  const openInquiryDrawer = (record?: TransportInquiry) => {
+    setEditingInquiry(record ?? null);
+    inquiryForm.resetFields();
+    inquiryForm.setFieldsValue(
+      record
+        ? {
+            ...record,
+            cargoUploadFiles: [],
+          }
+        : { cargoType: '普货', customsMode: '一般贸易', temperatureRequirement: '常温' },
+    );
+    setInquiryDrawerOpen(true);
+  };
+
+  const saveInquiry = async (values: Partial<TransportInquiry> & { cargoUploadFiles?: UploadFile[] }) => {
     const customer = customers.find((item) => item.id === values.customerId);
     try {
       const cargoFiles = await uploadCargoFiles(values.cargoUploadFiles);
-      await apiRequest<TransportInquiry>('/api/transport-inquiries', {
-        method: 'POST',
+      const payload = {
+        ...values,
+        cargoUploadFiles: undefined,
+        cargoFiles: [...(editingInquiry?.cargoFiles ?? []), ...cargoFiles],
+        customerName: values.customerName || customer?.shortName || customer?.name,
+      };
+      await apiRequest<TransportInquiry>(editingInquiry ? `/api/transport-inquiries/${editingInquiry.id}` : '/api/transport-inquiries', {
+        method: editingInquiry ? 'PUT' : 'POST',
         body: JSON.stringify({
-          ...values,
-          cargoUploadFiles: undefined,
-          cargoFiles,
-          customerName: values.customerName || customer?.shortName || customer?.name,
+          ...payload,
         }),
       });
-      message.success('询单已创建');
+      message.success(editingInquiry ? '询单已更新' : '询单已创建');
       setInquiryDrawerOpen(false);
+      setEditingInquiry(null);
       inquiryForm.resetFields();
+      await loadData();
+    } catch (error) {
+      message.error((error as Error).message);
+    }
+  };
+
+  const deleteInquiry = async (record: TransportInquiry) => {
+    try {
+      await apiRequest(`/api/transport-inquiries/${record.id}`, { method: 'DELETE' });
+      message.success('询单已删除');
       await loadData();
     } catch (error) {
       message.error((error as Error).message);
@@ -304,6 +343,54 @@ export default function App() {
       message.success('运输方案已生成');
       setPlanModalOpen(false);
       planForm.resetFields();
+      await loadData();
+    } catch (error) {
+      message.error((error as Error).message);
+    }
+  };
+
+  const openQuoteModal = (record: TransportInquiry) => {
+    setSelectedInquiry(record);
+    quoteForm.resetFields();
+    quoteForm.setFieldsValue({
+      quoteAmount: record.quoteAmount,
+      quoteCurrency: record.quoteCurrency || 'USD',
+      quoteRemark: record.quoteRemark,
+      quoteUploadFiles: [],
+      solutionUploadFiles: [],
+    });
+    setQuoteModalOpen(true);
+  };
+
+  const submitQuote = async (
+    values: Partial<TransportInquiry> & {
+      quoteUploadFiles?: UploadFile[];
+      solutionUploadFiles?: UploadFile[];
+    },
+  ) => {
+    if (!selectedInquiry) {
+      return;
+    }
+
+    try {
+      const [quoteFiles, solutionFiles] = await Promise.all([
+        uploadCargoFiles(values.quoteUploadFiles),
+        uploadCargoFiles(values.solutionUploadFiles),
+      ]);
+      const updated = await apiRequest<TransportInquiry>(`/api/transport-inquiries/${selectedInquiry.id}/quote`, {
+        method: 'POST',
+        body: JSON.stringify({
+          quoteAmount: values.quoteAmount,
+          quoteCurrency: values.quoteCurrency || 'USD',
+          quoteRemark: values.quoteRemark,
+          quoteFiles: [...(selectedInquiry.quoteFiles ?? []), ...quoteFiles],
+          solutionFiles: [...(selectedInquiry.solutionFiles ?? []), ...solutionFiles],
+        }),
+      });
+      setSelectedInquiry(updated);
+      message.success('报价已提交，状态已更新为完成报价');
+      setQuoteModalOpen(false);
+      quoteForm.resetFields();
       await loadData();
     } catch (error) {
       message.error((error as Error).message);
@@ -387,6 +474,17 @@ export default function App() {
           >
             生成方案
           </Button>
+          <Button type="link" onClick={() => openQuoteModal(row)}>
+            报价
+          </Button>
+          <Button type="link" icon={<EditOutlined />} onClick={() => openInquiryDrawer(row)}>
+            编辑
+          </Button>
+          <Popconfirm title="确认删除该询单？" onConfirm={() => void deleteInquiry(row)}>
+            <Button type="link" danger>
+              删除
+            </Button>
+          </Popconfirm>
         </Space>
       ),
     },
@@ -550,7 +648,7 @@ export default function App() {
                 新增员工
               </Button>
             ) : (
-              <Button type="primary" icon={<PlusOutlined />} onClick={() => setInquiryDrawerOpen(true)}>
+              <Button type="primary" icon={<PlusOutlined />} onClick={() => openInquiryDrawer()}>
                 新建询单
               </Button>
             )}
@@ -633,17 +731,20 @@ export default function App() {
       </Layout>
 
       <Drawer
-        title="新建运输询单"
+        title={editingInquiry ? `编辑运输询单 ${editingInquiry.inquiryNo}` : '新建运输询单'}
         width={620}
         open={inquiryDrawerOpen}
-        onClose={() => setInquiryDrawerOpen(false)}
+        onClose={() => {
+          setInquiryDrawerOpen(false);
+          setEditingInquiry(null);
+        }}
         destroyOnHidden
       >
         <Form
           form={inquiryForm}
           layout="vertical"
           initialValues={{ cargoType: '普货', customsMode: '一般贸易', temperatureRequirement: '常温' }}
-          onFinish={(values) => void createInquiry(values)}
+          onFinish={(values) => void saveInquiry(values)}
         >
           <Form.Item name="customerId" label="客户">
             <Select
@@ -743,7 +844,7 @@ export default function App() {
           </Form.Item>
           <Form.Item
             name="cargoUploadFiles"
-            label="客户货物文件"
+            label={editingInquiry ? '追加客户货物文件' : '客户货物文件'}
             valuePropName="fileList"
             getValueFromEvent={(event) => event?.fileList ?? []}
             extra="支持上传客户原始询价单、货物清单、装箱资料、图片、PDF、Excel、Word 等文件。"
@@ -752,8 +853,20 @@ export default function App() {
               <Button icon={<UploadOutlined />}>选择文件</Button>
             </Upload>
           </Form.Item>
+          {editingInquiry?.cargoFiles?.length ? (
+            <List
+              size="small"
+              header="已有客户货物文件"
+              dataSource={editingInquiry.cargoFiles}
+              renderItem={(item) => (
+                <List.Item>
+                  <List.Item.Meta title={item.fileName} description={fileSizeText(item.fileSize)} />
+                </List.Item>
+              )}
+            />
+          ) : null}
           <Button type="primary" htmlType="submit" block>
-            保存询单
+            {editingInquiry ? '保存修改' : '保存询单'}
           </Button>
         </Form>
       </Drawer>
@@ -822,6 +935,57 @@ export default function App() {
             >
               生成运输方案
             </Button>
+            <Button onClick={() => openQuoteModal(selectedInquiry)}>提交报价</Button>
+            {selectedInquiry.status === 'QUOTED' ? (
+              <Descriptions column={2} bordered size="small">
+                <Descriptions.Item label="报价状态">{statusTag(selectedInquiry.status)}</Descriptions.Item>
+                <Descriptions.Item label="报价时间">{selectedInquiry.quotedAt || '-'}</Descriptions.Item>
+                <Descriptions.Item label="报价金额">
+                  {selectedInquiry.quoteAmount ?? '-'} {selectedInquiry.quoteCurrency || ''}
+                </Descriptions.Item>
+                <Descriptions.Item label="报价说明">{selectedInquiry.quoteRemark || '-'}</Descriptions.Item>
+              </Descriptions>
+            ) : null}
+            <Card className="glass-card" title="报价文件" bordered={false}>
+              {selectedInquiry.quoteFiles?.length ? (
+                <List
+                  dataSource={selectedInquiry.quoteFiles}
+                  renderItem={(item) => (
+                    <List.Item
+                      actions={[
+                        <Button key="open" type="link" href={fileUrl(item.fileUrl)} target="_blank" rel="noreferrer">
+                          打开
+                        </Button>,
+                      ]}
+                    >
+                      <List.Item.Meta avatar={<PaperClipOutlined />} title={item.fileName} description={fileSizeText(item.fileSize)} />
+                    </List.Item>
+                  )}
+                />
+              ) : (
+                <Empty description="暂无报价文件" />
+              )}
+            </Card>
+            <Card className="glass-card" title="运载方案文件" bordered={false}>
+              {selectedInquiry.solutionFiles?.length ? (
+                <List
+                  dataSource={selectedInquiry.solutionFiles}
+                  renderItem={(item) => (
+                    <List.Item
+                      actions={[
+                        <Button key="open" type="link" href={fileUrl(item.fileUrl)} target="_blank" rel="noreferrer">
+                          打开
+                        </Button>,
+                      ]}
+                    >
+                      <List.Item.Meta avatar={<PaperClipOutlined />} title={item.fileName} description={fileSizeText(item.fileSize)} />
+                    </List.Item>
+                  )}
+                />
+              ) : (
+                <Empty description="暂无运载方案文件" />
+              )}
+            </Card>
             <Card className="glass-card" title="已生成方案" bordered={false}>
               {selectedInquiry.plans?.length ? (
                 <List
@@ -891,6 +1055,53 @@ export default function App() {
           </Row>
           <Form.Item name="planText" label="方案说明">
             <TextArea rows={5} placeholder="不填则自动生成操作节点、风险提示和费用说明" />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
+        title={selectedInquiry ? `报价 ${selectedInquiry.inquiryNo}` : '报价'}
+        open={quoteModalOpen}
+        onCancel={() => setQuoteModalOpen(false)}
+        onOk={() => quoteForm.submit()}
+        okText="提交报价"
+        width={680}
+      >
+        <Form form={quoteForm} layout="vertical" initialValues={{ quoteCurrency: 'USD' }} onFinish={(values) => void submitQuote(values)}>
+          <Row gutter={12}>
+            <Col span={12}>
+              <Form.Item name="quoteAmount" label="报价金额">
+                <InputNumber min={0} style={{ width: '100%' }} />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item name="quoteCurrency" label="币种">
+                <Select options={['USD', 'CNY', 'KZT', 'EUR'].map((value) => ({ value, label: value }))} />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Form.Item name="quoteRemark" label="报价说明">
+            <TextArea rows={4} placeholder="记录报价口径、时效、费用包含项、有效期等" />
+          </Form.Item>
+          <Form.Item
+            name="quoteUploadFiles"
+            label="上传报价"
+            valuePropName="fileList"
+            getValueFromEvent={(event) => event?.fileList ?? []}
+          >
+            <Upload beforeUpload={() => false} multiple>
+              <Button icon={<UploadOutlined />}>选择报价文件</Button>
+            </Upload>
+          </Form.Item>
+          <Form.Item
+            name="solutionUploadFiles"
+            label="上传运载方案"
+            valuePropName="fileList"
+            getValueFromEvent={(event) => event?.fileList ?? []}
+          >
+            <Upload beforeUpload={() => false} multiple>
+              <Button icon={<UploadOutlined />}>选择运载方案文件</Button>
+            </Upload>
           </Form.Item>
         </Form>
       </Modal>
