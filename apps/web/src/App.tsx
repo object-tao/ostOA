@@ -544,16 +544,10 @@ export default function App() {
                 <Text type="secondary">询单录入、方案生成、Cloudflare 部署的第一版工作台</Text>
               </div>
             </div>
-            <Alert
-              type="info"
-              showIcon
-              message="默认演示账号"
-              description="admin@obiecrm.com / Admin123!"
-            />
             <Form
               form={loginForm}
               layout="vertical"
-              initialValues={{ email: 'admin@obiecrm.com', password: 'Admin123!' }}
+              initialValues={{ email: '38128151@qq.com', password: 'Admin123!' }}
               onFinish={(values) => void login(values)}
             >
               <Form.Item name="email" label="邮箱" rules={[{ required: true, message: '请输入邮箱' }]}>

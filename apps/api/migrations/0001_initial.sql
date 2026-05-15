@@ -48,7 +48,7 @@ CREATE TABLE IF NOT EXISTS activity_logs (
 );
 
 INSERT OR IGNORE INTO users (id, email, password_hash, real_name, role_code, role_name)
-VALUES ('usr_admin', 'admin@obiecrm.com', '3eb3fe66b31e3b4d10fa70b5cad49c7112294af6ae4e476a1c405155d45aa121', 'Olivia Chen', 'ADMIN', '超级管理员');
+VALUES ('usr_admin', '38128151@qq.com', '3eb3fe66b31e3b4d10fa70b5cad49c7112294af6ae4e476a1c405155d45aa121', 'Olivia Chen', 'ADMIN', '超级管理员');
 
 INSERT OR IGNORE INTO contacts (id, name, company, email, phone, status, last_contacted_at)
 VALUES
