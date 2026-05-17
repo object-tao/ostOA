@@ -1,11 +1,13 @@
-import { useEffect, useMemo, useState } from 'react';
+﻿import { useEffect, useMemo, useState } from 'react';
 import {
   Alert,
   Avatar,
   Button,
   Card,
+  Checkbox,
   Col,
   Descriptions,
+  Divider,
   Drawer,
   Empty,
   Form,
@@ -16,10 +18,12 @@ import {
   Menu,
   Modal,
   Popconfirm,
+  Progress,
   Row,
   Select,
   Space,
   Statistic,
+  Steps,
   Switch,
   Table,
   Tag,
@@ -30,36 +34,77 @@ import {
 import type { ColumnsType } from 'antd/es/table';
 import type { UploadFile } from 'antd/es/upload/interface';
 import {
+  CarOutlined,
   CheckCircleOutlined,
+  CopyOutlined,
+  DeleteOutlined,
+  DollarCircleOutlined,
   DownloadOutlined,
   EditOutlined,
+  FileExcelOutlined,
   FileTextOutlined,
+  FundOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
   PaperClipOutlined,
   PlusOutlined,
   ReloadOutlined,
   RocketOutlined,
+  SaveOutlined,
   SettingOutlined,
   TeamOutlined,
   UploadOutlined,
 } from '@ant-design/icons';
 import { apiRequest } from './api/client';
 import { clearSession, getSessionUser, getToken, saveSession, type SessionUser } from './api/auth';
+import * as XLSX from 'xlsx';
+import {
+  formatLoadingPlan,
+  generateLoadingPlan,
+  normalizeCargo,
+  validateCargo,
+  type CargoItem,
+  type LoadingAssignment,
+  type LoadingPlan,
+} from './services/loadingPlan';
+import { CustomerManagementPage, SupplierManagementPage, type ManagedCustomer } from './pages/CustomerSupplierPages';
+import { DashboardPage } from './pages/DashboardPage';
+import { FinancePage } from './pages/FinancePage';
+import { OversizeProjectManagementPage, OversizeTaskManagementPage } from './pages/OversizeProjectManagementPage';
+import { TrackingPage } from './pages/TrackingPage';
+import { EmployeeRoleSelect, PermissionManagementPage } from './pages/PermissionManagementPage';
+import { WorkflowTemplatePage, WorkflowTodoPage } from './pages/WorkflowManagementPages';
 
 const { Header, Content, Sider } = Layout;
 const { Title, Text, Paragraph } = Typography;
 const { TextArea } = Input;
 
-type SectionKey = 'inquiries' | 'plans' | 'baseInfo';
+type SectionKey =
+  | 'home'
+  | 'plans'
+  | 'inquiries'
+  | 'loading'
+  | 'oversizeProjects'
+  | 'oversizeTasks'
+  | 'tracking'
+  | 'workflowTemplates'
+  | 'workflowTodos'
+  | 'finance'
+  | 'customers'
+  | 'suppliers'
+  | 'baseInfo'
+  | 'permissions';
 
 type Customer = {
   id: string;
   name: string;
+  customerCode?: string | null;
   shortName?: string | null;
   phone?: string | null;
   email?: string | null;
   region?: string | null;
+  invoiceInfo?: string | null;
+  notes?: string | null;
 };
 
 type Employee = {
@@ -72,6 +117,24 @@ type Employee = {
   isSalesperson: boolean;
   status: string;
   notes?: string | null;
+  roles?: { id: string; name: string; code: string }[];
+  roleIds?: string[];
+  createdAt: string;
+  updatedAt: string;
+};
+
+type VehicleType = {
+  id: string;
+  sequenceNo: number;
+  category: string;
+  name: string;
+  lineCount?: number | null;
+  axleCount?: number | null;
+  effectiveLength?: number | null;
+  effectiveVolume?: number | null;
+  payloadWeight?: number | null;
+  priceSort?: number | null;
+  scenario?: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -93,6 +156,18 @@ type TransportPlan = {
   createdAt: string;
 };
 
+type LoadingPlanRecord = {
+  id: string;
+  planNo: string;
+  title: string;
+  cargoItems: CargoItem[];
+  vehicleIds: string[];
+  planResult: LoadingPlan;
+  status: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
 type CargoFile = {
   key?: string;
   fileName: string;
@@ -107,6 +182,7 @@ type TransportInquiry = {
   customerId?: string | null;
   customerName: string;
   salesperson?: string | null;
+  serviceItems?: string[];
   contactName?: string | null;
   contactPhone?: string | null;
   cargoName: string;
@@ -135,12 +211,17 @@ type TransportInquiry = {
 };
 
 const statusMeta: Record<string, { text: string; color: string }> = {
-  NEW: { text: '待生成方案', color: 'gold' },
-  PLAN_READY: { text: '方案已生成', color: 'green' },
+  NEW: { text: '待报价', color: 'gold' },
+  PLAN_READY: { text: '已生成方案', color: 'green' },
   QUOTED: { text: '完成报价', color: 'blue' },
-  CONFIRMED: { text: '客户已确认', color: 'blue' },
+  CONFIRMED: { text: '已确认', color: 'blue' },
   CLOSED: { text: '已关闭', color: 'default' },
 };
+
+const serviceItemOptions = ['国内运输', '国际运输', '自驾接车', '装车', '报关', '转关', '清关', '其他'].map((value) => ({
+  value,
+  label: value,
+}));
 
 function statusTag(status: string) {
   const meta = statusMeta[status] ?? { text: status, color: 'default' };
@@ -177,29 +258,71 @@ function fileUrl(value: string) {
   return isLocalBrowser ? value : `${configuredApiBaseUrl}${value}`;
 }
 
+function beforeQuoteAttachmentUpload(file: File) {
+  const fileName = file.name.toLowerCase();
+  const isAllowed =
+    file.type === 'image/jpeg' ||
+    file.type === 'image/png' ||
+    file.type === 'application/pdf' ||
+    fileName.endsWith('.jpg') ||
+    fileName.endsWith('.jpeg') ||
+    fileName.endsWith('.png') ||
+    fileName.endsWith('.pdf');
+  if (!isAllowed) {
+    message.error('鍙兘涓婁紶 jpg銆乸ng銆乸df 鏂囦欢');
+    return Upload.LIST_IGNORE;
+  }
+  return false;
+}
+
+function nowrapText(value?: string | null) {
+  return <span className="nowrap-cell">{value || '-'}</span>;
+}
+
+function canUploadQuote(record?: TransportInquiry | null) {
+  return Boolean(record && record.status !== 'QUOTED');
+}
+
 export default function App() {
   const [loginForm] = Form.useForm();
   const [inquiryForm] = Form.useForm();
   const [planForm] = Form.useForm();
   const [quoteForm] = Form.useForm();
   const [employeeForm] = Form.useForm();
+  const [vehicleTypeForm] = Form.useForm();
+  const [cargoForm] = Form.useForm();
   const [sessionUser, setSessionUser] = useState<SessionUser | null>(getSessionUser());
-  const [activeSection, setActiveSection] = useState<SectionKey>('inquiries');
+  const [activeSection, setActiveSection] = useState<SectionKey>('home');
   const [siderCollapsed, setSiderCollapsed] = useState(false);
+  const [taskOpenRequest, setTaskOpenRequest] = useState<{ taskId: string; nodeId?: string | null; requestId: number } | null>(null);
   const [loading, setLoading] = useState(Boolean(getToken()));
   const [loginLoading, setLoginLoading] = useState(false);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [employees, setEmployees] = useState<Employee[]>([]);
+  const [vehicleTypes, setVehicleTypes] = useState<VehicleType[]>([]);
   const [inquiries, setInquiries] = useState<TransportInquiry[]>([]);
   const [plans, setPlans] = useState<TransportPlan[]>([]);
+  const [loadingPlans, setLoadingPlans] = useState<LoadingPlanRecord[]>([]);
+  const [cargoItems, setCargoItems] = useState<CargoItem[]>([]);
+  const [loadingPlan, setLoadingPlan] = useState<LoadingPlan | null>(null);
+  const [editingCargo, setEditingCargo] = useState<CargoItem | null>(null);
   const [inquiryDrawerOpen, setInquiryDrawerOpen] = useState(false);
   const [detailDrawerOpen, setDetailDrawerOpen] = useState(false);
   const [planModalOpen, setPlanModalOpen] = useState(false);
   const [quoteModalOpen, setQuoteModalOpen] = useState(false);
   const [employeeModalOpen, setEmployeeModalOpen] = useState(false);
+  const [vehicleTypeModalOpen, setVehicleTypeModalOpen] = useState(false);
+  const [cargoModalOpen, setCargoModalOpen] = useState(false);
+  const [savingLoadingPlan, setSavingLoadingPlan] = useState(false);
+  const [activeLoadingStep, setActiveLoadingStep] = useState('cargo');
+  const [loadingPlanSaved, setLoadingPlanSaved] = useState(false);
+  const [selectedLoadingPlanRecord, setSelectedLoadingPlanRecord] = useState<LoadingPlanRecord | null>(null);
   const [selectedInquiry, setSelectedInquiry] = useState<TransportInquiry | null>(null);
   const [editingInquiry, setEditingInquiry] = useState<TransportInquiry | null>(null);
   const [editingEmployee, setEditingEmployee] = useState<Employee | null>(null);
+  const [editingVehicleType, setEditingVehicleType] = useState<VehicleType | null>(null);
+
+  const can = (code: string) => sessionUser?.roleCode === 'ADMIN' || Boolean(sessionUser?.permissions?.includes(code));
 
   const stats = useMemo(() => {
     const waiting = inquiries.filter((item) => item.status === 'NEW').length;
@@ -219,16 +342,20 @@ export default function App() {
   const loadData = async () => {
     setLoading(true);
     try {
-      const [customerRes, inquiryRes, planRes, employeeRes] = await Promise.all([
+      const [customerRes, inquiryRes, planRes, employeeRes, vehicleTypeRes, loadingPlanRes] = await Promise.all([
         apiRequest<{ items: Customer[] }>('/api/customers'),
         apiRequest<{ items: TransportInquiry[] }>('/api/transport-inquiries'),
         apiRequest<{ items: TransportPlan[] }>('/api/transport-plans'),
         apiRequest<{ items: Employee[] }>('/api/employees'),
+        apiRequest<{ items: VehicleType[] }>('/api/vehicle-types'),
+        apiRequest<{ items: LoadingPlanRecord[] }>('/api/loading-plans'),
       ]);
       setCustomers(customerRes.items ?? []);
       setInquiries(inquiryRes.items ?? []);
       setPlans(planRes.items ?? []);
       setEmployees(employeeRes.items ?? []);
+      setVehicleTypes(vehicleTypeRes.items ?? []);
+      setLoadingPlans(loadingPlanRes.items ?? []);
     } catch (error) {
       message.error((error as Error).message);
     } finally {
@@ -238,7 +365,15 @@ export default function App() {
 
   useEffect(() => {
     if (getToken()) {
-      void loadData();
+      void apiRequest<{ user: SessionUser }>('/api/auth/me')
+        .then((result) => {
+          if (result.user) {
+            setSessionUser(result.user);
+            const token = getToken();
+            if (token) saveSession(token, result.user);
+          }
+        })
+        .finally(() => void loadData());
     }
   }, []);
 
@@ -289,7 +424,7 @@ export default function App() {
             ...record,
             cargoUploadFiles: [],
           }
-        : { cargoType: '普货', customsMode: '一般贸易', temperatureRequirement: '常温' },
+        : { cargoType: '??', customsMode: '????', temperatureRequirement: '??' },
     );
     setInquiryDrawerOpen(true);
   };
@@ -310,7 +445,7 @@ export default function App() {
           ...payload,
         }),
       });
-      message.success(editingInquiry ? '询单已更新' : '询单已创建');
+      message.success(editingInquiry ? '?????' : '?????');
       setInquiryDrawerOpen(false);
       setEditingInquiry(null);
       inquiryForm.resetFields();
@@ -323,7 +458,7 @@ export default function App() {
   const deleteInquiry = async (record: TransportInquiry) => {
     try {
       await apiRequest(`/api/transport-inquiries/${record.id}`, { method: 'DELETE' });
-      message.success('询单已删除');
+      message.success('?????');
       await loadData();
     } catch (error) {
       message.error((error as Error).message);
@@ -340,7 +475,7 @@ export default function App() {
         body: JSON.stringify(values),
       });
       setSelectedInquiry(updated);
-      message.success('运输方案已生成');
+      message.success('???????');
       setPlanModalOpen(false);
       planForm.resetFields();
       await loadData();
@@ -388,12 +523,407 @@ export default function App() {
         }),
       });
       setSelectedInquiry(updated);
-      message.success('报价已提交，状态已更新为完成报价');
+      message.success('????????????????');
       setQuoteModalOpen(false);
       quoteForm.resetFields();
       await loadData();
     } catch (error) {
       message.error((error as Error).message);
+    }
+  };
+
+  const openCargoModal = (record?: CargoItem) => {
+    setEditingCargo(record ?? null);
+    cargoForm.resetFields();
+    cargoForm.setFieldsValue(
+      record ?? {
+        quantity: 1,
+        allowRotate: true,
+        allowStack: false,
+      },
+    );
+    setCargoModalOpen(true);
+  };
+
+  const saveCargo = (values: Partial<CargoItem>) => {
+    const errors = validateCargo(values);
+    if (errors.length) {
+      message.error(errors[0]);
+      return;
+    }
+    const normalized = normalizeCargo({ ...values, id: editingCargo?.id });
+    setCargoItems((items) => (editingCargo ? items.map((item) => (item.id === editingCargo.id ? normalized : item)) : [...items, normalized]));
+    setCargoModalOpen(false);
+    setEditingCargo(null);
+    cargoForm.resetFields();
+    setLoadingPlan(null);
+    setLoadingPlanSaved(false);
+    setActiveLoadingStep('cargo');
+  };
+
+  const copyCargo = (record: CargoItem) => {
+    const copied = normalizeCargo({ ...record, id: undefined, boxNo: `${record.boxNo}-COPY` });
+    setCargoItems((items) => [...items, copied]);
+    setLoadingPlan(null);
+    setLoadingPlanSaved(false);
+    setActiveLoadingStep('cargo');
+  };
+
+  const deleteCargo = (record: CargoItem) => {
+    setCargoItems((items) => items.filter((item) => item.id !== record.id));
+    setLoadingPlan(null);
+    setLoadingPlanSaved(false);
+    setActiveLoadingStep('cargo');
+  };
+
+  const downloadCargoTemplate = () => {
+    const header = ['箱子序号', '名称', '长度(mm)', '宽度(mm)', '高度(mm)', '数量', '重量(kg)', '总重量(kg)', '体积(立方)', '允许旋转', '允许堆叠', '备注'];
+    const sample = ['BOX-001', '货物', '12000', '2600', '3200', '1', '18000', '', '', '是', '否', '备注'];
+    const blob = new Blob([`\ufeff${header.join(',')}\n${sample.join(',')}`], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = '配货导入模板.csv';
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const truthyText = (value: unknown) => {
+    const text = String(value ?? '').trim().toLowerCase();
+    return ['是', '可', '可以', '允许', '允许堆叠', '允许旋转', 'true', 'yes', 'y', '1'].includes(text);
+  };
+
+  const stackableText = (stackValue: unknown, requirementValue: unknown) => {
+    const requirement = String(requirementValue ?? '').trim();
+    if (requirement.includes('不可堆放') || requirement.includes('不能堆放') || requirement.includes('不允许堆放') || requirement.includes('不允许堆叠')) {
+      return false;
+    }
+    if (requirement.includes('可堆放') || requirement.includes('允许堆放') || requirement.includes('允许堆叠')) {
+      return true;
+    }
+    if (stackValue !== undefined && stackValue !== '') {
+      return truthyText(stackValue);
+    }
+    return true;
+  };
+
+  const importCargoFile = async (file: File) => {
+    try {
+      const buffer = await file.arrayBuffer();
+      const isCsv = file.name.toLowerCase().endsWith('.csv') || file.type.includes('csv');
+      const decodeCsv = () => {
+        for (const encoding of ['utf-8', 'gb18030', 'gbk']) {
+          try {
+            return new TextDecoder(encoding, { fatal: true }).decode(buffer);
+          } catch {
+            // Try the next common CSV encoding.
+          }
+        }
+        return new TextDecoder('utf-8').decode(buffer);
+      };
+      const workbook = isCsv ? XLSX.read(decodeCsv(), { type: 'string', raw: true }) : XLSX.read(buffer, { type: 'array' });
+      const sheet = workbook.Sheets[workbook.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: '' });
+      const imported: CargoItem[] = [];
+      const rowErrors: string[] = [];
+      const normalizeHeader = (value: string) =>
+        value
+          .replace(/^\ufeff/, '')
+          .replace(/\s+/g, '')
+          .replace(/[（]/g, '(')
+          .replace(/[）]/g, ')')
+          .replace(/³/g, '3')
+          .toLowerCase();
+      const normalizeNumber = (value: unknown) => {
+        if (typeof value === 'number') return value;
+        const text = String(value ?? '')
+          .replace(/,/g, '')
+          .trim();
+        return Number(text);
+      };
+      const valueOf = (row: Record<string, unknown>, names: string[]) => {
+        const normalizedRow = Object.fromEntries(Object.entries(row).map(([key, value]) => [normalizeHeader(key), value]));
+        return names
+          .map((name) => normalizedRow[normalizeHeader(name)])
+          .find((value) => value !== undefined && value !== '');
+      };
+
+      rows.forEach((row, index) => {
+        const requirement = valueOf(row, ['要求', '装载要求', '摆放要求', '堆叠要求', '备注']);
+        const rawItem: Partial<CargoItem> = {
+          boxNo: String(valueOf(row, ['箱子序号', '箱号', '序号', '编号', 'boxNo', 'box']) ?? ''),
+          name: String(valueOf(row, ['名称', '货物名称', '品名', '货物', 'name', 'cargoName']) ?? ''),
+          lengthCm: normalizeNumber(valueOf(row, ['长度(mm)', '长(mm)', '长度', '长', 'l', 'lengthMm', 'length']) ?? 0),
+          widthCm: normalizeNumber(valueOf(row, ['宽度(mm)', '宽(mm)', '宽度', '宽', 'w', 'widthMm', 'width']) ?? 0),
+          heightCm: normalizeNumber(valueOf(row, ['高度(mm)', '高(mm)', '高度', '高', 'h', 'heightMm', 'height']) ?? 0),
+          quantity: normalizeNumber(valueOf(row, ['数量', '件数', 'qty', 'quantity']) ?? 0),
+          weightKg: normalizeNumber(valueOf(row, ['重量(kg)', '重量', '单件重量', '单重(kg)', '单重', 'gw', 'weightKg', 'weight']) ?? 0),
+          totalWeightKg: normalizeNumber(valueOf(row, ['总重量(kg)', '总重(kg)', '总重量', '总重', 'totalWeightKg']) ?? 0),
+          volumeCbm: normalizeNumber(valueOf(row, ['体积(立方)', '体积(m3)', '体积(m³)', '体积', '方数', 'volumeCbm', 'volume']) ?? 0),
+          allowRotate: truthyText(valueOf(row, ['允许旋转', '旋转', '是否允许旋转', 'allowRotate'])),
+          allowStack: stackableText(valueOf(row, ['允许堆叠', '堆叠', '是否允许堆叠', 'allowStack']), requirement),
+          remark: String(valueOf(row, ['备注', '说明', 'remark']) ?? ''),
+        };
+        const errors = validateCargo(rawItem);
+        if (errors.length) {
+          rowErrors.push(`第 ${index + 2} 行：${errors.join('、')}`);
+        } else {
+          imported.push(normalizeCargo(rawItem));
+        }
+      });
+
+      if (rowErrors.length) {
+        Modal.error({
+          title: '导入数据校验未通过',
+          content: <Paragraph style={{ whiteSpace: 'pre-wrap' }}>{rowErrors.slice(0, 8).join('\n')}</Paragraph>,
+        });
+        return Upload.LIST_IGNORE;
+      }
+      setCargoItems((items) => [...items, ...imported]);
+      setLoadingPlan(null);
+      setLoadingPlanSaved(false);
+      setActiveLoadingStep('cargo');
+      message.success(`已导入 ${imported.length} 条货物`);
+    } catch (error) {
+      message.error(`导入失败：${(error as Error).message}`);
+    }
+    return Upload.LIST_IGNORE;
+  };
+
+  const runLoadingPlan = () => {
+    if (!cargoItems.length) {
+      message.warning('请先新增或导入货物信息');
+      return;
+    }
+    if (!vehicleTypes.length) {
+      message.warning('系统中还没有可用于自动匹配的车型数据');
+      return;
+    }
+    setLoadingPlan(generateLoadingPlan(cargoItems, vehicleTypes));
+    setLoadingPlanSaved(false);
+    setActiveLoadingStep('result');
+    message.success('配载方案已生成，可进入第二步调整');
+  };
+
+  const recalculateLoadingPlan = (plan: LoadingPlan): LoadingPlan => {
+    const vehicles = plan.vehicles.map((vehicle) => {
+      const usedWeightKg = vehicle.assignments.reduce((sum, item) => sum + item.weightKg, 0);
+      const usedVolumeCbm = vehicle.assignments.reduce((sum, item) => sum + item.volumeCbm, 0);
+      const maxLengthCm = vehicle.assignments.reduce((max, item) => Math.max(max, item.usedLengthCm), 0);
+      const weightLimit = Number(vehicle.vehicle.payloadWeight ?? 0);
+      const volumeLimit = Number(vehicle.vehicle.effectiveVolume ?? 0);
+      return {
+        ...vehicle,
+        usedWeightKg,
+        usedVolumeCbm,
+        maxLengthCm,
+        weightUtilization: weightLimit ? Math.round((usedWeightKg / weightLimit) * 1000) / 10 : 0,
+        volumeUtilization: volumeLimit ? Math.round((usedVolumeCbm / volumeLimit) * 1000) / 10 : 0,
+      };
+    });
+    return {
+      ...plan,
+      vehicles,
+      summary: {
+        ...plan.summary,
+        assignedQuantity: vehicles.reduce((sum, vehicle) => sum + vehicle.assignments.reduce((inner, item) => inner + item.quantity, 0), 0),
+        assignedWeightKg: vehicles.reduce((sum, vehicle) => sum + vehicle.usedWeightKg, 0),
+        assignedVolumeCbm: vehicles.reduce((sum, vehicle) => sum + vehicle.usedVolumeCbm, 0),
+        vehicleCount: vehicles.filter((vehicle) => vehicle.assignments.length > 0).length,
+      },
+    };
+  };
+
+  const updateAssignmentQuantity = (assignment: LoadingAssignment, quantity: number) => {
+    const cargo = cargoItems.find((item) => item.id === assignment.cargoId);
+    if (!cargo || !loadingPlan) {
+      return;
+    }
+    const nextQuantity = Math.max(1, Math.round(quantity));
+    const unitVolume = cargo.volumeCbm / cargo.quantity;
+    const updated = {
+      ...loadingPlan,
+      vehicles: loadingPlan.vehicles.map((vehicle) => ({
+        ...vehicle,
+        assignments: vehicle.assignments.map((item) =>
+          item.id === assignment.id
+            ? { ...item, quantity: nextQuantity, weightKg: cargo.weightKg * nextQuantity, volumeCbm: unitVolume * nextQuantity }
+            : item,
+        ),
+      })),
+    };
+    setLoadingPlan(recalculateLoadingPlan(updated));
+  };
+
+  const changeLoadingVehicleType = (sourceVehicleId: string, nextVehicleId: string) => {
+    if (!loadingPlan || sourceVehicleId === nextVehicleId) {
+      return;
+    }
+    const nextVehicle = vehicleTypes.find((item) => item.id === nextVehicleId);
+    if (!nextVehicle) {
+      return;
+    }
+    const updated = {
+      ...loadingPlan,
+      vehicles: loadingPlan.vehicles.map((vehicle) =>
+        vehicle.vehicle.id === sourceVehicleId
+          ? {
+              ...vehicle,
+              vehicle: nextVehicle,
+              loadingMethod: `${vehicle.loadingMethod || '????'} / ??????`,
+              assignments: vehicle.assignments.map((item) => ({
+                ...item,
+                vehicleId: nextVehicle.id,
+                vehicleName: `${nextVehicle.category} / ${nextVehicle.name}`,
+              })),
+            }
+          : vehicle,
+      ),
+    };
+    setLoadingPlan(recalculateLoadingPlan(updated));
+  };
+
+  const moveAssignmentToVehicle = (assignment: LoadingAssignment, targetVehicleIndex: number) => {
+    if (!loadingPlan) {
+      return;
+    }
+    const currentVehicleIndex = loadingPlan.vehicles.findIndex((vehicle) => vehicle.assignments.some((item) => item.id === assignment.id));
+    const targetVehicleResult = loadingPlan.vehicles[targetVehicleIndex];
+    if (currentVehicleIndex < 0 || !targetVehicleResult || currentVehicleIndex === targetVehicleIndex) {
+      return;
+    }
+    let moving: LoadingAssignment | null = null;
+    const vehicles = loadingPlan.vehicles.map((vehicle, index) => {
+      if (index !== currentVehicleIndex) {
+        return vehicle;
+      }
+      moving = vehicle.assignments.find((item) => item.id === assignment.id) ?? null;
+      return { ...vehicle, assignments: vehicle.assignments.filter((item) => item.id !== assignment.id) };
+    });
+    if (!moving) {
+      return;
+    }
+    const movedAssignment: LoadingAssignment = moving;
+    const updated = {
+      ...loadingPlan,
+      vehicles: vehicles.map((vehicle, index) =>
+        index === targetVehicleIndex
+          ? {
+              ...vehicle,
+              assignments: [
+                ...vehicle.assignments,
+                {
+                  ...movedAssignment,
+                  vehicleId: targetVehicleResult.vehicle.id,
+                  vehicleName: `${targetVehicleResult.vehicle.category} / ${targetVehicleResult.vehicle.name}`,
+                },
+              ],
+            }
+          : vehicle,
+      ),
+    };
+    setLoadingPlan(recalculateLoadingPlan(updated));
+  };
+
+  const downloadLoadingPlanFile = (plan: LoadingPlan) => {
+    const rows = plan.vehicles.flatMap((vehicle, vehicleIndex) =>
+      vehicle.assignments.map((assignment) => {
+        const cargo = cargoItems.find((item) => item.id === assignment.cargoId);
+        return [
+          `车辆${vehicleIndex + 1}`,
+          `${vehicle.vehicle.category} / ${vehicle.vehicle.name}`,
+          assignment.boxNo,
+          assignment.cargoName,
+          cargo?.lengthCm ?? '',
+          cargo?.widthCm ?? '',
+          cargo?.heightCm ?? '',
+          assignment.weightKg,
+        ];
+      }),
+    );
+    const sheet = XLSX.utils.aoa_to_sheet([
+      ['车辆', '当前车型名称', '货物序号', '货物名称', '长', '宽', '高', '重量'],
+      ...rows,
+    ]);
+    const merges: XLSX.Range[] = [];
+    let rowCursor = 1;
+    for (const vehicle of plan.vehicles) {
+      const count = vehicle.assignments.length;
+      if (count > 1) {
+        merges.push(
+          { s: { r: rowCursor, c: 0 }, e: { r: rowCursor + count - 1, c: 0 } },
+          { s: { r: rowCursor, c: 1 }, e: { r: rowCursor + count - 1, c: 1 } },
+        );
+      }
+      rowCursor += count;
+    }
+    sheet['!merges'] = merges;
+    sheet['!cols'] = [
+      { wch: 10 },
+      { wch: 24 },
+      { wch: 16 },
+      { wch: 24 },
+      { wch: 12 },
+      { wch: 12 },
+      { wch: 12 },
+      { wch: 14 },
+    ];
+    const range = XLSX.utils.decode_range(sheet['!ref'] ?? 'A1:H1');
+    for (let row = range.s.r; row <= range.e.r; row += 1) {
+      for (let col = range.s.c; col <= range.e.c; col += 1) {
+        const address = XLSX.utils.encode_cell({ r: row, c: col });
+        const cell = sheet[address];
+        if (!cell) continue;
+        cell.s = {
+          alignment: { horizontal: col <= 1 || row === 0 ? 'center' : 'left', vertical: 'center', wrapText: true },
+          border: {
+            top: { style: 'thin', color: { rgb: 'D9E2EC' } },
+            bottom: { style: 'thin', color: { rgb: 'D9E2EC' } },
+            left: { style: 'thin', color: { rgb: 'D9E2EC' } },
+            right: { style: 'thin', color: { rgb: 'D9E2EC' } },
+          },
+          font: row === 0 ? { bold: true, color: { rgb: '10233F' } } : undefined,
+          fill: row === 0 ? { fgColor: { rgb: 'F3F7FB' } } : undefined,
+        };
+      }
+    }
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, sheet, '配载方案');
+    const buffer = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
+    const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${plan.title.replace(/[\\/:*?"<>|]/g, '-')}.xlsx`;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const saveLoadingPlan = async () => {
+    if (!loadingPlan) {
+      message.warning('璇峰厛鐢熸垚閰嶈浇鏂规');
+      return;
+    }
+    setSavingLoadingPlan(true);
+    try {
+      await apiRequest('/api/loading-plans', {
+        method: 'POST',
+        body: JSON.stringify({
+          title: loadingPlan.title,
+          cargoItems,
+          vehicleIds: loadingPlan.vehicles.map((item) => item.vehicle.id),
+          planResult: loadingPlan,
+        }),
+      });
+      message.success('???????');
+      downloadLoadingPlanFile(loadingPlan);
+      await loadData();
+      setLoadingPlanSaved(true);
+      setActiveLoadingStep('saved');
+    } catch (error) {
+      message.error((error as Error).message);
+    } finally {
+      setSavingLoadingPlan(false);
     }
   };
 
@@ -410,22 +940,86 @@ export default function App() {
 
   const saveEmployee = async (values: Partial<Employee>) => {
     try {
+      const { roleIds, ...employeeValues } = values;
       if (editingEmployee) {
         await apiRequest(`/api/employees/${editingEmployee.id}`, {
           method: 'PUT',
-          body: JSON.stringify(values),
+          body: JSON.stringify(employeeValues),
         });
-        message.success('员工信息已更新');
+        await apiRequest(`/api/employees/${editingEmployee.id}/roles`, {
+          method: 'PUT',
+          body: JSON.stringify({ roleIds: roleIds ?? [] }),
+        });
+        message.success('员工已更新');
       } else {
-        await apiRequest('/api/employees', {
+        const result = await apiRequest<{ id: string }>('/api/employees', {
           method: 'POST',
-          body: JSON.stringify(values),
+          body: JSON.stringify(employeeValues),
         });
+        if (result.id) {
+          await apiRequest(`/api/employees/${result.id}/roles`, {
+            method: 'PUT',
+            body: JSON.stringify({ roleIds: roleIds ?? [] }),
+          });
+        }
         message.success('员工已创建');
       }
       setEmployeeModalOpen(false);
       setEditingEmployee(null);
       employeeForm.resetFields();
+      await loadData();
+    } catch (error) {
+      message.error((error as Error).message);
+    }
+  };
+
+  const resetEmployeePassword = (employee: Employee) => {
+    Modal.confirm({
+      title: '???????',
+      content: `?? ${employee.name} ???????? ost987456?${employee.email ? '' : ' ?????????????????'}`,
+      okText: '纭閲嶇疆',
+      cancelText: '鍙栨秷',
+      onOk: async () => {
+        try {
+          await apiRequest(`/api/employees/${employee.id}/reset-password`, { method: 'POST' });
+          message.success('瀵嗙爜宸查噸缃紝榛樿瀵嗙爜锛歰st987456');
+        } catch (error) {
+          message.error((error as Error).message);
+        }
+      },
+    });
+  };
+
+  const openVehicleTypeModal = (record?: VehicleType) => {
+    setEditingVehicleType(record ?? null);
+    vehicleTypeForm.resetFields();
+    vehicleTypeForm.setFieldsValue(
+      record ?? {
+        sequenceNo: vehicleTypes.length + 1,
+        category: '篷布车',
+      },
+    );
+    setVehicleTypeModalOpen(true);
+  };
+
+  const saveVehicleType = async (values: Partial<VehicleType>) => {
+    try {
+      if (editingVehicleType) {
+        await apiRequest(`/api/vehicle-types/${editingVehicleType.id}`, {
+          method: 'PUT',
+          body: JSON.stringify(values),
+        });
+        message.success('车型已更新');
+      } else {
+        await apiRequest('/api/vehicle-types', {
+          method: 'POST',
+          body: JSON.stringify(values),
+        });
+        message.success('车型已创建');
+      }
+      setVehicleTypeModalOpen(false);
+      setEditingVehicleType(null);
+      vehicleTypeForm.resetFields();
       await loadData();
     } catch (error) {
       message.error((error as Error).message);
@@ -438,45 +1032,54 @@ export default function App() {
   };
 
   const inquiryColumns: ColumnsType<TransportInquiry> = [
+    { title: '状态', width: 120, fixed: 'left', render: (_, row) => statusTag(row.status) },
     {
       title: '询单号',
       dataIndex: 'inquiryNo',
-      fixed: 'left',
+      width: 180,
       render: (value, record) => (
-        <Button type="link" style={{ paddingInline: 0 }} onClick={() => openDetail(record)}>
+        <Button type="link" className="table-link-cell" onClick={() => openDetail(record)}>
           {value}
         </Button>
       ),
     },
-    { title: '客户', dataIndex: 'customerName' },
-    { title: '业务员', render: (_, row) => row.salesperson || '-' },
-    { title: '货物', dataIndex: 'cargoName' },
-    { title: '线路', render: (_, row) => `${row.origin} -> ${row.destination}` },
-    { title: '重量/体积', render: (_, row) => `${row.weightKg ?? '-'} kg / ${row.volumeCbm ?? '-'} m3` },
-    { title: '文件', render: (_, row) => <Tag icon={<PaperClipOutlined />}>{row.cargoFiles?.length ?? 0}</Tag> },
-    { title: '期望到达', render: (_, row) => dateText(row.targetArrivalDate) },
-    { title: '状态', render: (_, row) => statusTag(row.status) },
+    { title: '客户', dataIndex: 'customerName', width: 180, render: nowrapText },
+    { title: '业务员', width: 120, render: (_, row) => nowrapText(row.salesperson) },
+    {
+      title: '服务项目',
+      width: 220,
+      render: (_, row) => (
+        <Space size={4} wrap>
+          {(row.serviceItems ?? []).map((item) => (
+            <Tag key={item} color="blue">{item}</Tag>
+          ))}
+        </Space>
+      ),
+    },
+    { title: '货物', dataIndex: 'cargoName', width: 180, render: nowrapText },
+    {
+      title: '路线',
+      width: 280,
+      render: (_, row) => <span className="route-cell">{`${row.origin} -> ${row.destination}`}</span>,
+    },
+    { title: '重量/体积', width: 150, render: (_, row) => nowrapText(`${row.weightKg ?? '-'} kg / ${row.volumeCbm ?? '-'} m3`) },
+    { title: '文件', width: 90, render: (_, row) => <Tag icon={<PaperClipOutlined />}>{row.cargoFiles?.length ?? 0}</Tag> },
+    { title: '期望到达', width: 120, render: (_, row) => nowrapText(dateText(row.targetArrivalDate)) },
+    { title: '询单时间', width: 180, render: (_, row) => nowrapText(row.createdAt) },
     {
       title: '操作',
+      width: 260,
       fixed: 'right',
       render: (_, row) => (
         <Space>
           <Button type="link" onClick={() => openDetail(row)}>
             查看
           </Button>
-          <Button
-            type="link"
-            icon={<RocketOutlined />}
-            onClick={() => {
-              setSelectedInquiry(row);
-              setPlanModalOpen(true);
-            }}
-          >
-            生成方案
-          </Button>
-          <Button type="link" onClick={() => openQuoteModal(row)}>
-            报价
-          </Button>
+          {canUploadQuote(row) ? (
+            <Button type="link" icon={<UploadOutlined />} onClick={() => openQuoteModal(row)}>
+              报价上传
+            </Button>
+          ) : null}
           <Button type="link" icon={<EditOutlined />} onClick={() => openInquiryDrawer(row)}>
             编辑
           </Button>
@@ -491,13 +1094,52 @@ export default function App() {
   ];
 
   const planColumns: ColumnsType<TransportPlan> = [
-    { title: '方案号', dataIndex: 'planNo' },
-    { title: '询单号', dataIndex: 'inquiryNo' },
-    { title: '客户', dataIndex: 'customerName' },
-    { title: '方案标题', dataIndex: 'title' },
-    { title: '时效', render: (_, row) => `${row.transitDays} 天` },
-    { title: '预估费用', render: (_, row) => `${row.estimatedCost} ${row.currency}` },
-    { title: '状态', render: (_, row) => <Tag color="blue">{row.status}</Tag> },
+    { title: '???', dataIndex: 'planNo' },
+    { title: '???', dataIndex: 'inquiryNo' },
+    { title: '??', dataIndex: 'customerName' },
+    { title: '????', dataIndex: 'title' },
+    { title: '??', render: (_, row) => `${row.transitDays} ?` },
+    { title: '????', render: (_, row) => `${row.estimatedCost} ${row.currency}` },
+    { title: '??', render: (_, row) => <Tag color="blue">{row.status}</Tag> },
+  ];
+
+  const quoteColumns: ColumnsType<TransportInquiry> = [
+    {
+      title: '???',
+      dataIndex: 'inquiryNo',
+      width: 180,
+      render: (value, record) => (
+        <Button type="link" className="table-link-cell" onClick={() => openDetail(record)}>
+          {value}
+        </Button>
+      ),
+    },
+    { title: '瀹㈡埛', dataIndex: 'customerName', width: 180, render: nowrapText },
+    { title: '???', width: 120, render: (_, row) => nowrapText(row.salesperson) },
+    {
+      title: '鎶ヤ环閲戦',
+      width: 140,
+      render: (_, row) => nowrapText(row.quoteAmount !== null && row.quoteAmount !== undefined ? `${row.quoteAmount} ${row.quoteCurrency || ''}` : '-'),
+    },
+    { title: '鎶ヤ环鏂囦欢', width: 100, render: (_, row) => <Tag icon={<PaperClipOutlined />}>{row.quoteFiles?.length ?? 0}</Tag> },
+    { title: '鏂规闄勪欢', width: 100, render: (_, row) => <Tag icon={<PaperClipOutlined />}>{row.solutionFiles?.length ?? 0}</Tag> },
+    { title: '??', width: 120, render: (_, row) => statusTag(row.status) },
+    { title: '鎶ヤ环鏃堕棿', width: 180, render: (_, row) => nowrapText(row.quotedAt) },
+    {
+      title: '鎿嶄綔',
+      width: 140,
+      fixed: 'right',
+      render: (_, row) =>
+        canUploadQuote(row) ? (
+          <Button type="link" icon={<UploadOutlined />} onClick={() => openQuoteModal(row)}>
+            鎶ヤ环涓婁紶
+          </Button>
+        ) : (
+          <Button type="link" onClick={() => openDetail(row)}>
+            鏌ョ湅
+          </Button>
+        ),
+    },
   ];
 
   const employeeColumns: ColumnsType<Employee> = [
@@ -510,6 +1152,7 @@ export default function App() {
       title: '业务员',
       render: (_, row) => (row.isSalesperson ? <Tag color="blue">是</Tag> : <Tag>否</Tag>),
     },
+    { title: '角色', render: (_, row) => (row.roles?.length ? row.roles.map((role) => <Tag key={role.id}>{role.name}</Tag>) : '-') },
     {
       title: '状态',
       render: (_, row) => <Tag color={row.status === 'ACTIVE' ? 'green' : 'default'}>{row.status === 'ACTIVE' ? '启用' : '停用'}</Tag>,
@@ -517,18 +1160,164 @@ export default function App() {
     {
       title: '操作',
       render: (_, row) => (
-        <Button type="link" icon={<EditOutlined />} onClick={() => openEmployeeModal(row)}>
+        <Button type="link" icon={<EditOutlined />} disabled={!can('base.manage')} onClick={() => openEmployeeModal(row)}>
+          编辑
+        </Button>
+      ),
+    },
+    {
+      title: '重置密码',
+      width: 110,
+      render: (_, row) => (
+        <Button type="link" disabled={!can('employee.reset_password')} onClick={() => resetEmployeePassword(row)}>
+          重置
+        </Button>
+      ),
+    },
+  ];
+
+  const vehicleTypeColumns: ColumnsType<VehicleType> = [
+    { title: '价格排序', dataIndex: 'priceSort', width: 120, render: (value) => value ?? '-' },
+    { title: '序号', dataIndex: 'sequenceNo', width: 80 },
+    { title: '分类', dataIndex: 'category', width: 140, render: (value) => <Tag color="blue">{value}</Tag> },
+    { title: '车型名称', dataIndex: 'name', width: 180, render: nowrapText },
+    { title: '线', dataIndex: 'lineCount', width: 80, render: (value) => value ?? '-' },
+    { title: '轴', dataIndex: 'axleCount', width: 80, render: (value) => value ?? '-' },
+    { title: '有效长度', dataIndex: 'effectiveLength', width: 120, render: (value) => value ?? '-' },
+    { title: '有效方数', dataIndex: 'effectiveVolume', width: 120, render: (value) => value ?? '-' },
+    { title: '载重', dataIndex: 'payloadWeight', width: 120, render: (value) => value ?? '-' },
+    { title: '适用场景', dataIndex: 'scenario', width: 260, render: nowrapText },
+    {
+      title: '操作',
+      width: 100,
+      fixed: 'right',
+      render: (_, row) => (
+        <Button type="link" icon={<EditOutlined />} onClick={() => openVehicleTypeModal(row)}>
           编辑
         </Button>
       ),
     },
   ];
 
+  const vehicleCategoryOptions = ['篷布车', '冷藏车', '普通平板车', '超限车'].map((value) => ({
+    value,
+    label: value,
+  }));
+
+  const cargoColumns: ColumnsType<CargoItem> = [
+    { title: '箱子序号', dataIndex: 'boxNo', width: 120, fixed: 'left' },
+    { title: '名称', dataIndex: 'name', width: 150, render: nowrapText },
+    { title: '尺寸(mm)', width: 170, render: (_, row) => `${row.lengthCm} x ${row.widthCm} x ${row.heightCm}` },
+    { title: '数量', dataIndex: 'quantity', width: 80 },
+    { title: '单重(kg)', dataIndex: 'weightKg', width: 100 },
+    { title: '总重(kg)', dataIndex: 'totalWeightKg', width: 110, render: (value) => Number(value).toFixed(2) },
+    { title: '体积(m3)', dataIndex: 'volumeCbm', width: 110, render: (value) => Number(value).toFixed(3) },
+    { title: '旋转', width: 80, render: (_, row) => (row.allowRotate ? <Tag color="blue">是</Tag> : <Tag>否</Tag>) },
+    { title: '堆叠', width: 80, render: (_, row) => (row.allowStack ? <Tag color="green">是</Tag> : <Tag>否</Tag>) },
+    { title: '备注', dataIndex: 'remark', width: 180, render: nowrapText },
+    {
+      title: '操作',
+      width: 170,
+      fixed: 'right',
+      render: (_, row) => (
+        <Space>
+          <Button type="link" icon={<EditOutlined />} onClick={() => openCargoModal(row)}>
+            编辑
+          </Button>
+          <Button type="link" icon={<CopyOutlined />} onClick={() => copyCargo(row)}>
+            复制
+          </Button>
+          <Popconfirm title="确认删除该货物？" onConfirm={() => deleteCargo(row)}>
+            <Button type="link" danger icon={<DeleteOutlined />}>
+              删除
+            </Button>
+          </Popconfirm>
+        </Space>
+      ),
+    },
+  ];
+
+  const savedLoadingPlanColumns: ColumnsType<LoadingPlanRecord> = [
+    {
+      title: '方案号',
+      dataIndex: 'planNo',
+      width: 170,
+      render: (value, row) => (
+        <Button type="link" style={{ padding: 0, whiteSpace: 'normal', height: 'auto', textAlign: 'left' }} onClick={() => setSelectedLoadingPlanRecord(row)}>
+          {value}
+        </Button>
+      ),
+    },
+    { title: '标题', dataIndex: 'title', width: 220, render: nowrapText },
+    { title: '车辆数', width: 90, render: (_, row) => row.planResult?.summary?.vehicleCount ?? '-' },
+    { title: '已配件数', width: 100, render: (_, row) => row.planResult?.summary?.assignedQuantity ?? '-' },
+    { title: '状态', dataIndex: 'status', width: 90, render: (value) => <Tag color="green">{value}</Tag> },
+    { title: '保存时间', dataIndex: 'createdAt', width: 180, render: nowrapText },
+    {
+      title: '文件',
+      width: 90,
+      render: (_, row) => (
+        <Button type="link" icon={<DownloadOutlined />} onClick={() => downloadLoadingPlanFile(row.planResult)}>
+          下载
+        </Button>
+      ),
+    },
+  ];
+
   const sectionTitle: Record<SectionKey, string> = {
+    plans: '报价管理',
+    home: '首页',
+    finance: '财务管理',
+    customers: '客户管理',
+    suppliers: '供应商管理',
     inquiries: '询单管理',
-    plans: '生成方案',
+    loading: '配货配载',
+    oversizeProjects: '项目管理',
+    oversizeTasks: '运输任务',
+    tracking: '轨迹跟踪',
+    workflowTemplates: '流程模板',
+    workflowTodos: '我的待办',
     baseInfo: '基础信息',
+    permissions: '权限管理',
   };
+
+  const menuPermission: Partial<Record<SectionKey, string>> = {
+    home: 'home.view',
+    workflowTodos: 'todo.view',
+    tracking: 'tracking.view',
+    inquiries: 'inquiry.view',
+    loading: 'loading.view',
+    oversizeProjects: 'project.view',
+    oversizeTasks: 'task.view',
+    finance: 'finance.view',
+    suppliers: 'supplier.view',
+    customers: 'customer.view',
+    baseInfo: 'base.view',
+    workflowTemplates: 'workflow.view',
+    permissions: 'rbac.view',
+  };
+
+  const sidebarItems = [
+    { key: 'home', icon: <FundOutlined />, label: '首页' },
+    { key: 'workflowTodos', icon: <FileTextOutlined />, label: '我的待办' },
+    { key: 'tracking', icon: <PaperClipOutlined />, label: '轨迹跟踪' },
+    { key: 'inquiries', icon: <FileTextOutlined />, label: '询单管理' },
+    { key: 'loading', icon: <CarOutlined />, label: '配货配载' },
+    { key: 'oversizeProjects', icon: <RocketOutlined />, label: '项目管理' },
+    { key: 'oversizeTasks', icon: <CheckCircleOutlined />, label: '运输任务' },
+    { key: 'finance', icon: <DollarCircleOutlined />, label: '财务管理' },
+    { key: 'suppliers', icon: <CarOutlined />, label: '供应商管理' },
+    { key: 'customers', icon: <TeamOutlined />, label: '客户管理' },
+    { key: 'baseInfo', icon: <SettingOutlined />, label: '基础信息' },
+    { key: 'workflowTemplates', icon: <SettingOutlined />, label: '流程模板' },
+    { key: 'permissions', icon: <SettingOutlined />, label: '权限管理' },
+  ].filter((item) => can(menuPermission[item.key as SectionKey] ?? 'home.view'));
+
+  useEffect(() => {
+    if (sessionUser && sidebarItems.length && !sidebarItems.some((item) => item.key === activeSection)) {
+      setActiveSection(sidebarItems[0].key as SectionKey);
+    }
+  }, [sessionUser?.permissions?.join(','), activeSection]);
 
   if (!sessionUser) {
     return (
@@ -536,12 +1325,14 @@ export default function App() {
         <Card className="login-panel" bordered={false}>
           <Space direction="vertical" size={22} style={{ width: '100%' }}>
             <div className="brand-lockup">
-              <div className="brand-mark">T</div>
+              <div className="brand-mark brand-logo-mark">
+                <img src="/ost-logo.jpg" alt="欧速通" />
+              </div>
               <div>
                 <Title level={3} style={{ margin: 0 }}>
                   中亚运输管理系统
                 </Title>
-                <Text type="secondary">询单录入、方案生成、Cloudflare 部署的第一版工作台</Text>
+                <Text type="secondary">Central Asia Transport OS</Text>
               </div>
             </div>
             <Form
@@ -557,7 +1348,7 @@ export default function App() {
                 <Input.Password size="large" />
               </Form.Item>
               <Button type="primary" htmlType="submit" size="large" block loading={loginLoading}>
-                登录系统
+                登录
               </Button>
             </Form>
           </Space>
@@ -578,7 +1369,9 @@ export default function App() {
       >
         <div className="sidebar-brand-row">
           <div className="brand-lockup brand-lockup-sidebar">
-            <div className="brand-mark">T</div>
+            <div className="brand-mark brand-logo-mark">
+              <img src="/ost-logo.jpg" alt="欧速通" />
+            </div>
             {!siderCollapsed && (
               <div className="brand-text">
                 <Title level={4} style={{ margin: 0 }}>
@@ -595,17 +1388,13 @@ export default function App() {
             onClick={() => setSiderCollapsed((value) => !value)}
           />
         </div>
-        {!siderCollapsed && <div className="sidebar-note">先跑通询单与生成方案，再逐步扩展报价、调度、在途和财务。</div>}
+        {!siderCollapsed && <div className="sidebar-note">做一个高效、稳定、有温度的哈萨克斯坦车队运营公司</div>}
         <Menu
           mode="inline"
           selectedKeys={[activeSection]}
           inlineCollapsed={siderCollapsed}
           onClick={(event) => setActiveSection(event.key as SectionKey)}
-          items={[
-            { key: 'inquiries', icon: <FileTextOutlined />, label: '询单管理' },
-            { key: 'plans', icon: <RocketOutlined />, label: '生成方案' },
-            { key: 'baseInfo', icon: <SettingOutlined />, label: '基础信息' },
-          ]}
+          items={sidebarItems}
         />
         <div className="sidebar-user">
           <Space>
@@ -637,95 +1426,416 @@ export default function App() {
             <Button icon={<ReloadOutlined />} onClick={() => void loadData()} loading={loading}>
               刷新
             </Button>
-            {activeSection === 'baseInfo' ? (
-              <Button type="primary" icon={<PlusOutlined />} onClick={() => openEmployeeModal()}>
-                新增员工
+            {activeSection === 'baseInfo' && can('base.manage') ? (
+              <Button type="primary" icon={<PlusOutlined />} onClick={() => openVehicleTypeModal()}>
+                新增车型
+              </Button>
+            ) : activeSection === 'loading' && can('loading.manage') ? (
+              <Button type="primary" icon={<PlusOutlined />} onClick={() => openCargoModal()}>
+                新增货物
               </Button>
             ) : (
-              <Button type="primary" icon={<PlusOutlined />} onClick={() => openInquiryDrawer()}>
+              <Button
+                type="primary"
+                icon={<PlusOutlined />}
+                onClick={() => openInquiryDrawer()}
+                style={{
+                  display:
+                    activeSection === 'home' ||
+                    activeSection === 'customers' ||
+                    activeSection === 'finance' ||
+                    activeSection === 'suppliers' ||
+                    activeSection === 'oversizeProjects' ||
+                    activeSection === 'oversizeTasks' ||
+                    activeSection === 'tracking' ||
+                    activeSection === 'workflowTemplates' ||
+                    activeSection === 'workflowTodos' ||
+                    activeSection === 'permissions' ||
+                    !can('inquiry.create')
+                      ? 'none'
+                      : undefined,
+                }}
+              >
                 新建询单
               </Button>
             )}
+            <Button onClick={logout}>
+              退出登录
+            </Button>
           </Space>
         </Header>
 
         <Content className="crm-content">
           <Space direction="vertical" size={18} style={{ width: '100%' }}>
-            <Row gutter={[16, 16]}>
-              <Col xs={24} sm={12} xl={6}>
-                <Card className="metric-card">
-                  <Statistic title="询单总数" value={stats.inquiryCount} prefix={<FileTextOutlined />} />
-                </Card>
-              </Col>
-              <Col xs={24} sm={12} xl={6}>
-                <Card className="metric-card">
-                  <Statistic title="待生成方案" value={stats.waiting} />
-                </Card>
-              </Col>
-              <Col xs={24} sm={12} xl={6}>
-                <Card className="metric-card">
-                  <Statistic title="已生成方案" value={stats.ready} prefix={<CheckCircleOutlined />} />
-                </Card>
-              </Col>
-              <Col xs={24} sm={12} xl={6}>
-                <Card className="metric-card">
-                  <Statistic title="方案数" value={stats.planCount} prefix={<RocketOutlined />} />
-                </Card>
-              </Col>
-            </Row>
+            {activeSection !== 'loading' &&
+            activeSection !== 'home' &&
+            activeSection !== 'oversizeProjects' &&
+            activeSection !== 'oversizeTasks' &&
+            activeSection !== 'tracking' &&
+            activeSection !== 'workflowTemplates' &&
+            activeSection !== 'workflowTodos' &&
+            activeSection !== 'permissions' &&
+            activeSection !== 'finance' ? (
+              <Row gutter={[16, 16]}>
+                <Col xs={24} sm={12} xl={6}>
+                  <Card className="metric-card">
+                    <Statistic title="询单总数" value={stats.inquiryCount} prefix={<FileTextOutlined />} />
+                  </Card>
+                </Col>
+                <Col xs={24} sm={12} xl={6}>
+                  <Card className="metric-card">
+                    <Statistic title="待报价" value={stats.waiting} />
+                  </Card>
+                </Col>
+                <Col xs={24} sm={12} xl={6}>
+                  <Card className="metric-card">
+                    <Statistic title="已报价" value={stats.ready} prefix={<CheckCircleOutlined />} />
+                  </Card>
+                </Col>
+                <Col xs={24} sm={12} xl={6}>
+                  <Card className="metric-card">
+                    <Statistic title="方案数" value={stats.planCount} prefix={<RocketOutlined />} />
+                  </Card>
+                </Col>
+              </Row>
+            ) : null}
 
-            {activeSection === 'inquiries' ? (
+            {activeSection === 'home' ? (
+              <DashboardPage />
+            ) : activeSection === 'inquiries' ? (
               <Card className="glass-card" title="询单列表" bordered={false}>
                 <Table
                   rowKey="id"
                   loading={loading}
                   dataSource={inquiries}
                   columns={inquiryColumns}
-                  scroll={{ x: 1180 }}
+                  scroll={{ x: 1500 }}
                   pagination={{ pageSize: 8 }}
                 />
               </Card>
             ) : activeSection === 'plans' ? (
-              <Card className="glass-card" title="运输方案库" bordered={false}>
+              <Card className="glass-card" title="报价记录" bordered={false}>
                 <Table
                   rowKey="id"
                   loading={loading}
-                  dataSource={plans}
-                  columns={planColumns}
-                  expandable={{
-                    expandedRowRender: (record) => (
-                      <Paragraph style={{ whiteSpace: 'pre-wrap', margin: 0 }}>{record.planText}</Paragraph>
-                    ),
-                  }}
+                  dataSource={inquiries}
+                  columns={quoteColumns}
+                  scroll={{ x: 1180 }}
                   pagination={{ pageSize: 8 }}
                 />
               </Card>
+            ) : activeSection === 'loading' ? (
+              <Space direction="vertical" size={16} style={{ width: '100%' }}>
+                <Card className="glass-card" bordered={false}>
+                  <Steps
+                    type="navigation"
+                    size="small"
+                    current={activeLoadingStep === 'cargo' ? 0 : activeLoadingStep === 'result' ? 1 : 2}
+                    items={[
+                      { title: '第一步：录入货物数据' },
+                      { title: '第二步：配载结果调整' },
+                      { title: '第三步：保存与导出方案' },
+                    ]}
+                    onChange={(index) => {
+                      if (index === 1 && !loadingPlan) {
+                        message.warning('请先完成自动配载');
+                        return;
+                      }
+                      if (index === 2 && !loadingPlanSaved) {
+                        message.warning('请先在第二步保存方案');
+                        return;
+                      }
+                      setActiveLoadingStep(index === 0 ? 'cargo' : index === 1 ? 'result' : 'saved');
+                    }}
+                  />
+                </Card>
+                {activeLoadingStep === 'cargo' ? (
+                <Card
+                  className="glass-card"
+                  title="第一步：货物信息"
+                  bordered={false}
+                  extra={
+                    <Space>
+                      <Button icon={<DownloadOutlined />} onClick={downloadCargoTemplate}>
+                        下载模板
+                      </Button>
+                      <Upload
+                        accept=".xlsx,.xls,.csv"
+                        showUploadList={false}
+                        beforeUpload={(file) => importCargoFile(file)}
+                      >
+                        <Button icon={<FileExcelOutlined />}>批量导入</Button>
+                      </Upload>
+                      <Button icon={<CarOutlined />} onClick={runLoadingPlan}>
+                        自动配载
+                      </Button>
+                      <Button type="primary" icon={<PlusOutlined />} onClick={() => openCargoModal()}>
+                        新增货物
+                      </Button>
+                    </Space>
+                  }
+                >
+                  <Table
+                    rowKey="id"
+                    dataSource={cargoItems}
+                    columns={cargoColumns}
+                    scroll={{ x: 1280 }}
+                    pagination={{ pageSize: 8 }}
+                    locale={{ emptyText: <Empty description="请新增或导入货物信息" /> }}
+                  />
+                </Card>
+                ) : null}
+
+                {activeLoadingStep === 'result' ? (
+                <Card
+                  className="glass-card"
+                  title="第二步：配载结果调整"
+                  bordered={false}
+                  extra={
+                    <Space>
+                      <Button disabled={!loadingPlan} icon={<DownloadOutlined />} onClick={() => loadingPlan && downloadLoadingPlanFile(loadingPlan)}>
+                        下载
+                      </Button>
+                      <Button type="primary" disabled={!loadingPlan} loading={savingLoadingPlan} icon={<SaveOutlined />} onClick={saveLoadingPlan}>
+                        保存方案</Button>
+                    </Space>
+                  }
+                >
+                  {loadingPlan ? (
+                    <Space direction="vertical" size={16} style={{ width: '100%' }}>
+                      <Row gutter={[12, 12]}>
+                        <Col xs={24} md={6}>
+                          <Statistic title="已配/总件数" value={`${loadingPlan.summary.assignedQuantity}/${loadingPlan.summary.totalCargoQuantity}`} />
+                        </Col>
+                        <Col xs={24} md={6}>
+                          <Statistic title="车辆数" value={loadingPlan.summary.vehicleCount} />
+                        </Col>
+                        <Col xs={24} md={6}>
+                          <Statistic title="已配重量 kg" value={loadingPlan.summary.assignedWeightKg.toFixed(2)} />
+                        </Col>
+                        <Col xs={24} md={6}>
+                          <Statistic title="已配方数 m3" value={loadingPlan.summary.assignedVolumeCbm.toFixed(3)} />
+                        </Col>
+                      </Row>
+                      {loadingPlan.vehicles.map((vehicle, vehicleIndex) => (
+                        <Card
+                          key={vehicle.vehicle.id}
+                          size="small"
+                          title={`${vehicle.vehicle.category} / ${vehicle.vehicle.name} · ${vehicle.vehicle.lineCount ?? '-'}线 ${vehicle.vehicle.axleCount ?? '-'}轴 · ${vehicle.loadingMethod ?? '自动配载'}`}
+                          extra={
+                            <Space>
+                              <Text type="secondary">调整车型</Text>
+                              <Select
+                                value={vehicle.vehicle.id}
+                                options={vehicleTypes.map((item) => ({ value: item.id, label: `${item.category} / ${item.name}` }))}
+                                onChange={(value) => changeLoadingVehicleType(vehicle.vehicle.id, value)}
+                                style={{ width: 260 }}
+                              />
+                            </Space>
+                          }
+                        >
+                          <Row gutter={[12, 12]} style={{ marginBottom: 12 }}>
+                            <Col xs={24} md={8}>
+                              <Text type="secondary">重量利用率</Text>
+                              <Progress percent={Math.min(vehicle.weightUtilization, 100)} status={vehicle.weightUtilization > 100 ? 'exception' : 'normal'} />
+                            </Col>
+                            <Col xs={24} md={8}>
+                              <Text type="secondary">方数利用率</Text>
+                              <Progress percent={Math.min(vehicle.volumeUtilization, 100)} status={vehicle.volumeUtilization > 100 ? 'exception' : 'normal'} />
+                            </Col>
+                            <Col xs={24} md={8}>
+                              <Text type="secondary">最长货物</Text>
+                              <div>{vehicle.maxLengthCm} mm</div>
+                            </Col>
+                          </Row>
+                          <Table
+                            rowKey="id"
+                            size="small"
+                            dataSource={vehicle.assignments}
+                            pagination={false}
+                            columns={[
+                              { title: '箱子序号', dataIndex: 'boxNo' },
+                              { title: '货物', dataIndex: 'cargoName' },
+                              {
+                                title: '移动车次',
+                                width: 220,
+                                render: (_, assignment) => (
+                                  <Select
+                                    value={vehicleIndex}
+                                    options={loadingPlan.vehicles.map((item, index) => ({
+                                      value: index,
+                                      label: `第 ${index + 1} 车 ${item.vehicle.category} / ${item.vehicle.name}`,
+                                    }))}
+                                    onChange={(value) => moveAssignmentToVehicle(assignment, value)}
+                                    style={{ width: '100%' }}
+                                  />
+                                ),
+                              },
+                              {
+                                title: '数量',
+                                width: 110,
+                                render: (_, assignment) => (
+                                  <InputNumber min={1} value={assignment.quantity} onChange={(value) => updateAssignmentQuantity(assignment, Number(value || 1))} />
+                                ),
+                              },
+                              { title: '重量 kg', dataIndex: 'weightKg', render: (value) => Number(value).toFixed(2) },
+                              { title: '方数 m3', dataIndex: 'volumeCbm', render: (value) => Number(value).toFixed(3) },
+                              { title: '提醒', render: (_, assignment) => assignment.notes.length ? assignment.notes.map((item) => <Tag key={item}>{item}</Tag>) : '-' },
+                            ]}
+                          />
+                          {vehicle.warnings.length ? <Alert type="warning" showIcon style={{ marginTop: 12 }} message={vehicle.warnings.join('?')} /> : null}
+                        </Card>
+                      ))}
+                      {loadingPlan.unassigned.length ? (
+                        <Alert
+                          type="error"
+                          showIcon
+                          message="存在无法配载货物"
+                          description={loadingPlan.unassigned.map((item) => `${item.cargo.boxNo} ${item.cargo.name} x ${item.quantity}：${item.reasons.join('、')}`).join('\n')}
+                        />
+                      ) : null}
+                    </Space>
+                  ) : (
+                    <Empty description="点击自动配载后展示方案" />
+                  )}
+                </Card>
+                ) : null}
+
+                {activeLoadingStep === 'saved' ? (
+                <Card className="glass-card" title="第三步：已保存配载方案" bordered={false}>
+                  <Table
+                    rowKey="id"
+                    loading={loading}
+                    dataSource={loadingPlans}
+                    columns={savedLoadingPlanColumns}
+                    scroll={{ x: 900 }}
+                    pagination={{ pageSize: 5 }}
+                  />
+                </Card>
+                ) : null}
+              </Space>
+            ) : activeSection === 'oversizeProjects' ? (
+              <OversizeProjectManagementPage customers={customers} />
+            ) : activeSection === 'oversizeTasks' ? (
+              <OversizeTaskManagementPage openRequest={taskOpenRequest} />
+            ) : activeSection === 'tracking' ? (
+              <TrackingPage />
+            ) : activeSection === 'workflowTemplates' ? (
+              <WorkflowTemplatePage />
+            ) : activeSection === 'workflowTodos' ? (
+              <WorkflowTodoPage
+                onOpenTask={(todo) => {
+                  if (!todo.taskId) return;
+                  setTaskOpenRequest({ taskId: todo.taskId, nodeId: todo.instanceNodeId, requestId: Date.now() });
+                  setActiveSection('oversizeTasks');
+                }}
+              />
+            ) : activeSection === 'permissions' ? (
+              <PermissionManagementPage />
+            ) : activeSection === 'finance' ? (
+              <FinancePage />
+            ) : activeSection === 'customers' ? (
+              <CustomerManagementPage customers={customers as ManagedCustomer[]} loading={loading} onReload={loadData} />
+            ) : activeSection === 'suppliers' ? (
+              <SupplierManagementPage />
             ) : (
-              <Card
-                className="glass-card"
-                title="员工与业务员"
-                bordered={false}
-                extra={
-                  <Button type="primary" icon={<PlusOutlined />} onClick={() => openEmployeeModal()}>
-                    新增员工
-                  </Button>
-                }
-              >
-                <Table
-                  rowKey="id"
-                  loading={loading}
-                  dataSource={employees}
-                  columns={employeeColumns}
-                  pagination={{ pageSize: 10 }}
-                />
-              </Card>
+              <Space direction="vertical" size={16} style={{ width: '100%' }}>
+                <Card
+                  className="glass-card"
+                  title="车型配置"
+                  bordered={false}
+                  extra={
+                    can('base.manage') ? (
+                      <Button type="primary" icon={<PlusOutlined />} onClick={() => openVehicleTypeModal()}>
+                        新增车型
+                      </Button>
+                    ) : null
+                  }
+                >
+                  <Table
+                    rowKey="id"
+                    loading={loading}
+                    dataSource={vehicleTypes}
+                    columns={vehicleTypeColumns}
+                    scroll={{ x: 1280 }}
+                    pagination={{ pageSize: 10 }}
+                  />
+                </Card>
+              </Space>
             )}
           </Space>
         </Content>
       </Layout>
 
+      <Modal
+        title={selectedLoadingPlanRecord ? `閰嶈浇鏂规璇︽儏 ${selectedLoadingPlanRecord.planNo}` : '閰嶈浇鏂规璇︽儏'}
+        open={Boolean(selectedLoadingPlanRecord)}
+        onCancel={() => setSelectedLoadingPlanRecord(null)}
+        footer={
+          selectedLoadingPlanRecord ? (
+            <Button icon={<DownloadOutlined />} onClick={() => downloadLoadingPlanFile(selectedLoadingPlanRecord.planResult)}>
+              涓嬭浇鏂规鏂囦欢
+            </Button>
+          ) : null
+        }
+        width={1080}
+      >
+        {selectedLoadingPlanRecord ? (
+          <Space direction="vertical" size={16} style={{ width: '100%' }}>
+            <Descriptions bordered size="small" column={3}>
+              <Descriptions.Item label="方案号">{selectedLoadingPlanRecord.planNo}</Descriptions.Item>
+              <Descriptions.Item label="标题">{selectedLoadingPlanRecord.title}</Descriptions.Item>
+              <Descriptions.Item label="状态">{selectedLoadingPlanRecord.status}</Descriptions.Item>
+              <Descriptions.Item label="车辆数">{selectedLoadingPlanRecord.planResult?.summary?.vehicleCount ?? '-'}</Descriptions.Item>
+              <Descriptions.Item label="已配件数">{selectedLoadingPlanRecord.planResult?.summary?.assignedQuantity ?? '-'}</Descriptions.Item>
+              <Descriptions.Item label="保存时间">{selectedLoadingPlanRecord.createdAt}</Descriptions.Item>
+              <Descriptions.Item label="已配重量 kg">{selectedLoadingPlanRecord.planResult?.summary?.assignedWeightKg?.toFixed?.(2) ?? '-'}</Descriptions.Item>
+              <Descriptions.Item label="已配方数 m3">{selectedLoadingPlanRecord.planResult?.summary?.assignedVolumeCbm?.toFixed?.(3) ?? '-'}</Descriptions.Item>
+              <Descriptions.Item label="货物总数">{selectedLoadingPlanRecord.planResult?.summary?.totalCargoQuantity ?? '-'}</Descriptions.Item>
+            </Descriptions>
+            {selectedLoadingPlanRecord.planResult?.vehicles?.map((vehicle, index) => (
+              <Card
+                key={`${vehicle.vehicle.id}-${index}`}
+                size="small"
+                title={`第 ${index + 1} 车：${vehicle.vehicle.category} / ${vehicle.vehicle.name} - ${vehicle.vehicle.lineCount ?? '-'} 线 ${vehicle.vehicle.axleCount ?? '-'} 轴`}
+              >
+                <Row gutter={[12, 12]} style={{ marginBottom: 12 }}>
+                  <Col xs={24} md={6}>
+                    <Statistic title="瑁呰浇鏂瑰紡" value={vehicle.loadingMethod || '鑷姩閰嶈浇'} />
+                  </Col>
+                  <Col xs={24} md={6}>
+                    <Statistic title="閲嶉噺 kg" value={vehicle.usedWeightKg.toFixed(2)} />
+                  </Col>
+                  <Col xs={24} md={6}>
+                    <Statistic title="鏂规暟 m3" value={vehicle.usedVolumeCbm.toFixed(3)} />
+                  </Col>
+                  <Col xs={24} md={6}>
+                    <Statistic title="鏈€澶ч暱搴?mm" value={vehicle.maxLengthCm} />
+                  </Col>
+                </Row>
+                <Table
+                  rowKey="id"
+                  size="small"
+                  pagination={false}
+                  dataSource={vehicle.assignments}
+                  columns={[
+                    { title: '绠卞瓙搴忓彿', dataIndex: 'boxNo', width: 140 },
+                    { title: '璐х墿', dataIndex: 'cargoName', width: 180 },
+                    { title: '鏁伴噺', dataIndex: 'quantity', width: 90 },
+                    { title: '閲嶉噺 kg', dataIndex: 'weightKg', width: 120, render: (value) => Number(value).toFixed(2) },
+                    { title: '鏂规暟 m3', dataIndex: 'volumeCbm', width: 120, render: (value) => Number(value).toFixed(3) },
+                    { title: '鎻愰啋', render: (_, assignment) => (assignment.notes?.length ? assignment.notes.map((item) => <Tag key={item}>{item}</Tag>) : '-') },
+                  ]}
+                />
+                {vehicle.warnings?.length ? <Alert type="warning" showIcon style={{ marginTop: 12 }} message={vehicle.warnings.join('?')} /> : null}
+              </Card>
+            ))}
+          </Space>
+        ) : null}
+      </Modal>
+
       <Drawer
-        title={editingInquiry ? `编辑运输询单 ${editingInquiry.inquiryNo}` : '新建运输询单'}
+        title={editingInquiry ? `编辑询单 ${editingInquiry.inquiryNo}` : '新增询单'}
         width={620}
         open={inquiryDrawerOpen}
         onClose={() => {
@@ -737,10 +1847,10 @@ export default function App() {
         <Form
           form={inquiryForm}
           layout="vertical"
-          initialValues={{ cargoType: '普货', customsMode: '一般贸易', temperatureRequirement: '常温' }}
+          initialValues={{ cargoType: '??', customsMode: '????', temperatureRequirement: '??' }}
           onFinish={(values) => void saveInquiry(values)}
         >
-          <Form.Item name="customerId" label="客户">
+          <Form.Item name="customerId" label="瀹㈡埛">
             <Select
               allowClear
               showSearch
@@ -748,7 +1858,7 @@ export default function App() {
               options={customers.map((item) => ({ value: item.id, label: item.shortName || item.name }))}
             />
           </Form.Item>
-          <Form.Item name="customerName" label="客户名称" rules={[{ required: true, message: '请选择或填写客户' }]}>
+          <Form.Item name="customerName" label="????" rules={[{ required: true, message: '????????' }]}>
             <Input placeholder="可直接填写临时客户" />
           </Form.Item>
           <Form.Item name="salesperson" label="业务员">
@@ -760,6 +1870,18 @@ export default function App() {
               options={salespeople.map((item) => ({ value: item.name, label: item.name }))}
             />
           </Form.Item>
+          <Form.Item
+            name="serviceItems"
+            label="鏈嶅姟椤圭洰"
+            rules={[{ required: true, message: '???????????' }]}
+          >
+            <Select
+              mode="multiple"
+              allowClear
+              options={serviceItemOptions}
+              placeholder="可多选，例如：国际运输、报关、清关"
+            />
+          </Form.Item>
           <Row gutter={12}>
             <Col span={12}>
               <Form.Item name="contactName" label="联系人">
@@ -767,59 +1889,59 @@ export default function App() {
               </Form.Item>
             </Col>
             <Col span={12}>
-              <Form.Item name="contactPhone" label="联系电话">
+              <Form.Item name="contactPhone" label="鑱旂郴鐢佃瘽">
                 <Input />
               </Form.Item>
             </Col>
           </Row>
-          <Form.Item name="cargoName" label="货物名称" rules={[{ required: true, message: '请输入货物名称' }]}>
+          <Form.Item name="cargoName" label="????" rules={[{ required: true, message: '???????' }]}>
             <Input placeholder="如：机械设备、鲜花、跨境电商包裹" />
           </Form.Item>
           <Row gutter={12}>
             <Col span={12}>
               <Form.Item name="origin" label="起运地" rules={[{ required: true, message: '请输入起运地' }]}>
-                <Input placeholder="中国 上海" />
+                <Input placeholder="涓浗 涓婃捣" />
               </Form.Item>
             </Col>
             <Col span={12}>
               <Form.Item name="destination" label="目的地" rules={[{ required: true, message: '请输入目的地' }]}>
-                <Input placeholder="哈萨克斯坦 阿拉木图" />
+                <Input placeholder="鍝堣惃鍏嬫柉鍧?闃挎媺鏈ㄥ浘" />
               </Form.Item>
             </Col>
           </Row>
           <Row gutter={12}>
             <Col span={8}>
-              <Form.Item name="weightKg" label="重量 kg">
+              <Form.Item name="weightKg" label="閲嶉噺 kg">
                 <InputNumber min={0} style={{ width: '100%' }} />
               </Form.Item>
             </Col>
             <Col span={8}>
-              <Form.Item name="volumeCbm" label="体积 m3">
+              <Form.Item name="volumeCbm" label="浣撶Н m3">
                 <InputNumber min={0} style={{ width: '100%' }} />
               </Form.Item>
             </Col>
             <Col span={8}>
-              <Form.Item name="packageCount" label="件数">
+              <Form.Item name="packageCount" label="浠舵暟">
                 <InputNumber min={0} style={{ width: '100%' }} />
               </Form.Item>
             </Col>
           </Row>
           <Row gutter={12}>
             <Col span={12}>
-              <Form.Item name="readyDate" label="备货日期">
+              <Form.Item name="readyDate" label="澶囪揣鏃ユ湡">
                 <Input type="date" />
               </Form.Item>
             </Col>
             <Col span={12}>
-              <Form.Item name="targetArrivalDate" label="期望到达">
+              <Form.Item name="targetArrivalDate" label="鏈熸湜鍒拌揪">
                 <Input type="date" />
               </Form.Item>
             </Col>
           </Row>
           <Row gutter={12}>
             <Col span={8}>
-              <Form.Item name="cargoType" label="货物类型">
-                <Select options={['普货', '大件', '冷链', '危险品', '电商小包'].map((value) => ({ value, label: value }))} />
+              <Form.Item name="cargoType" label="璐х墿绫诲瀷">
+                <Select options={['??', '??', '??', '???', '????'].map((value) => ({ value, label: value }))} />
               </Form.Item>
             </Col>
             <Col span={8}>
@@ -828,29 +1950,29 @@ export default function App() {
               </Form.Item>
             </Col>
             <Col span={8}>
-              <Form.Item name="temperatureRequirement" label="温控要求">
-                <Select options={['常温', '冷藏', '冷冻', '恒温'].map((value) => ({ value, label: value }))} />
+              <Form.Item name="temperatureRequirement" label="娓╂帶瑕佹眰">
+                <Select options={['甯告俯', '鍐疯棌', '鍐峰喕', '鎭掓俯'].map((value) => ({ value, label: value }))} />
               </Form.Item>
             </Col>
           </Row>
-          <Form.Item name="specialRequirement" label="特殊要求">
+          <Form.Item name="specialRequirement" label="鐗规畩瑕佹眰">
             <TextArea rows={4} placeholder="时效、口岸偏好、装卸限制、保险、目的国清关要求等" />
           </Form.Item>
           <Form.Item
             name="cargoUploadFiles"
-            label={editingInquiry ? '追加客户货物文件' : '客户货物文件'}
+            label={editingInquiry ? '杩藉姞瀹㈡埛璐х墿鏂囦欢' : '瀹㈡埛璐х墿鏂囦欢'}
             valuePropName="fileList"
             getValueFromEvent={(event) => event?.fileList ?? []}
             extra="支持上传客户原始询价单、货物清单、装箱资料、图片、PDF、Excel、Word 等文件。"
           >
             <Upload beforeUpload={() => false} multiple>
-              <Button icon={<UploadOutlined />}>选择文件</Button>
+              <Button icon={<UploadOutlined />}>閫夋嫨鏂囦欢</Button>
             </Upload>
           </Form.Item>
           {editingInquiry?.cargoFiles?.length ? (
             <List
               size="small"
-              header="已有客户货物文件"
+              header="宸叉湁瀹㈡埛璐х墿鏂囦欢"
               dataSource={editingInquiry.cargoFiles}
               renderItem={(item) => (
                 <List.Item>
@@ -860,7 +1982,7 @@ export default function App() {
             />
           ) : null}
           <Button type="primary" htmlType="submit" block>
-            {editingInquiry ? '保存修改' : '保存询单'}
+            {editingInquiry ? '淇濆瓨淇敼' : '淇濆瓨璇㈠崟'}
           </Button>
         </Form>
       </Drawer>
@@ -875,23 +1997,30 @@ export default function App() {
         {selectedInquiry ? (
           <Space direction="vertical" size={18} style={{ width: '100%' }}>
             <Descriptions column={2} bordered size="small">
-              <Descriptions.Item label="客户">{selectedInquiry.customerName}</Descriptions.Item>
-              <Descriptions.Item label="状态">{statusTag(selectedInquiry.status)}</Descriptions.Item>
-              <Descriptions.Item label="业务员">{selectedInquiry.salesperson || '-'}</Descriptions.Item>
-              <Descriptions.Item label="联系人">{selectedInquiry.contactName || '-'}</Descriptions.Item>
-              <Descriptions.Item label="货物">{selectedInquiry.cargoName}</Descriptions.Item>
-              <Descriptions.Item label="类型">{selectedInquiry.cargoType || '-'}</Descriptions.Item>
-              <Descriptions.Item label="起运地">{selectedInquiry.origin}</Descriptions.Item>
-              <Descriptions.Item label="目的地">{selectedInquiry.destination}</Descriptions.Item>
-              <Descriptions.Item label="重量">{selectedInquiry.weightKg ?? '-'} kg</Descriptions.Item>
-              <Descriptions.Item label="体积">{selectedInquiry.volumeCbm ?? '-'} m3</Descriptions.Item>
-              <Descriptions.Item label="报关方式">{selectedInquiry.customsMode || '-'}</Descriptions.Item>
-              <Descriptions.Item label="温控要求">{selectedInquiry.temperatureRequirement || '-'}</Descriptions.Item>
-              <Descriptions.Item label="特殊要求" span={2}>
+              <Descriptions.Item label="??">{selectedInquiry.customerName}</Descriptions.Item>
+              <Descriptions.Item label="??">{statusTag(selectedInquiry.status)}</Descriptions.Item>
+              <Descriptions.Item label="???">{selectedInquiry.salesperson || '-'}</Descriptions.Item>
+              <Descriptions.Item label="???">{selectedInquiry.contactName || '-'}</Descriptions.Item>
+              <Descriptions.Item label="鏈嶅姟椤圭洰" span={2}>
+                <Space size={4} wrap>
+                  {(selectedInquiry.serviceItems ?? []).map((item) => (
+                    <Tag key={item} color="blue">{item}</Tag>
+                  ))}
+                </Space>
+              </Descriptions.Item>
+              <Descriptions.Item label="璐х墿">{selectedInquiry.cargoName}</Descriptions.Item>
+              <Descriptions.Item label="绫诲瀷">{selectedInquiry.cargoType || '-'}</Descriptions.Item>
+              <Descriptions.Item label="???">{selectedInquiry.origin}</Descriptions.Item>
+              <Descriptions.Item label="???">{selectedInquiry.destination}</Descriptions.Item>
+              <Descriptions.Item label="閲嶉噺">{selectedInquiry.weightKg ?? '-'} kg</Descriptions.Item>
+              <Descriptions.Item label="浣撶Н">{selectedInquiry.volumeCbm ?? '-'} m3</Descriptions.Item>
+              <Descriptions.Item label="鎶ュ叧鏂瑰紡">{selectedInquiry.customsMode || '-'}</Descriptions.Item>
+              <Descriptions.Item label="娓╂帶瑕佹眰">{selectedInquiry.temperatureRequirement || '-'}</Descriptions.Item>
+              <Descriptions.Item label="鐗规畩瑕佹眰" span={2}>
                 {selectedInquiry.specialRequirement || '-'}
               </Descriptions.Item>
             </Descriptions>
-            <Card className="glass-card" title="客户货物文件" bordered={false}>
+            <Card className="glass-card" title="瀹㈡埛璐х墿鏂囦欢" bordered={false}>
               {selectedInquiry.cargoFiles?.length ? (
                 <List
                   dataSource={selectedInquiry.cargoFiles}
@@ -906,41 +2035,38 @@ export default function App() {
                           target="_blank"
                           rel="noreferrer"
                         >
-                          打开
+                          鎵撳紑
                         </Button>,
                       ]}
                     >
                       <List.Item.Meta
                         avatar={<PaperClipOutlined />}
                         title={item.fileName}
-                        description={`${item.fileType || '未知类型'} · ${fileSizeText(item.fileSize)}`}
+                        description={`${item.fileType || '未知类型'} - ${fileSizeText(item.fileSize)}`}
                       />
                     </List.Item>
                   )}
                 />
               ) : (
-                <Empty description="暂无客户货物文件" />
+                <Empty description="????????" />
               )}
             </Card>
-            <Button
-              type="primary"
-              icon={<RocketOutlined />}
-              onClick={() => setPlanModalOpen(true)}
-            >
-              生成运输方案
-            </Button>
-            <Button onClick={() => openQuoteModal(selectedInquiry)}>提交报价</Button>
+            {canUploadQuote(selectedInquiry) ? (
+              <Button type="primary" icon={<UploadOutlined />} onClick={() => openQuoteModal(selectedInquiry)}>
+                ????
+              </Button>
+            ) : null}
             {selectedInquiry.status === 'QUOTED' ? (
               <Descriptions column={2} bordered size="small">
-                <Descriptions.Item label="报价状态">{statusTag(selectedInquiry.status)}</Descriptions.Item>
-                <Descriptions.Item label="报价时间">{selectedInquiry.quotedAt || '-'}</Descriptions.Item>
-                <Descriptions.Item label="报价金额">
+                <Descriptions.Item label="????">{statusTag(selectedInquiry.status)}</Descriptions.Item>
+                <Descriptions.Item label="????">{selectedInquiry.quotedAt || '-'}</Descriptions.Item>
+                <Descriptions.Item label="鎶ヤ环閲戦">
                   {selectedInquiry.quoteAmount ?? '-'} {selectedInquiry.quoteCurrency || ''}
                 </Descriptions.Item>
-                <Descriptions.Item label="报价说明">{selectedInquiry.quoteRemark || '-'}</Descriptions.Item>
+                <Descriptions.Item label="鎶ヤ环璇存槑">{selectedInquiry.quoteRemark || '-'}</Descriptions.Item>
               </Descriptions>
             ) : null}
-            <Card className="glass-card" title="报价文件" bordered={false}>
+            <Card className="glass-card" title="鎶ヤ环鏂囦欢" bordered={false}>
               {selectedInquiry.quoteFiles?.length ? (
                 <List
                   dataSource={selectedInquiry.quoteFiles}
@@ -948,7 +2074,7 @@ export default function App() {
                     <List.Item
                       actions={[
                         <Button key="open" type="link" href={fileUrl(item.fileUrl)} target="_blank" rel="noreferrer">
-                          打开
+                          鎵撳紑
                         </Button>,
                       ]}
                     >
@@ -957,10 +2083,10 @@ export default function App() {
                   )}
                 />
               ) : (
-                <Empty description="暂无报价文件" />
+                <Empty description="鏆傛棤鎶ヤ环鏂囦欢" />
               )}
             </Card>
-            <Card className="glass-card" title="运载方案文件" bordered={false}>
+            <Card className="glass-card" title="杩愯浇鏂规鏂囦欢" bordered={false}>
               {selectedInquiry.solutionFiles?.length ? (
                 <List
                   dataSource={selectedInquiry.solutionFiles}
@@ -968,7 +2094,7 @@ export default function App() {
                     <List.Item
                       actions={[
                         <Button key="open" type="link" href={fileUrl(item.fileUrl)} target="_blank" rel="noreferrer">
-                          打开
+                          鎵撳紑
                         </Button>,
                       ]}
                     >
@@ -977,7 +2103,7 @@ export default function App() {
                   )}
                 />
               ) : (
-                <Empty description="暂无运载方案文件" />
+                <Empty description="鏆傛棤杩愯浇鏂规鏂囦欢" />
               )}
             </Card>
             <Card className="glass-card" title="已生成方案" bordered={false}>
@@ -987,12 +2113,12 @@ export default function App() {
                   renderItem={(item) => (
                     <List.Item>
                       <List.Item.Meta
-                        title={`${item.planNo} · ${item.title}`}
+                        title={`${item.planNo} ? ${item.title}`}
                         description={
                           <Paragraph style={{ whiteSpace: 'pre-wrap', marginBottom: 0 }}>
                             {item.route}
                             {'\n'}
-                            {item.transitDays} 天 · {item.estimatedCost} {item.currency}
+                            {item.transitDays} 澶?路 {item.estimatedCost} {item.currency}
                             {'\n'}
                             {item.planText}
                           </Paragraph>
@@ -1002,7 +2128,7 @@ export default function App() {
                   )}
                 />
               ) : (
-                <Empty description="还没有方案" />
+                <Empty description="暂无方案" />
               )}
             </Card>
           </Space>
@@ -1010,98 +2136,204 @@ export default function App() {
       </Drawer>
 
       <Modal
-        title="生成运输方案"
+        title="鐢熸垚杩愯緭鏂规"
         open={planModalOpen}
         onCancel={() => setPlanModalOpen(false)}
         onOk={() => planForm.submit()}
-        okText="生成方案"
+        okText="鐢熸垚鏂规"
         width={680}
       >
         <Alert
           type="info"
           showIcon
           style={{ marginBottom: 16 }}
-          message="可直接生成系统建议方案，也可以填写覆盖项后生成。"
+          message="????????????????????????"
         />
         <Form form={planForm} layout="vertical" onFinish={(values) => void generatePlan(values)}>
-          <Form.Item name="title" label="方案标题">
-            <Input placeholder="不填则自动生成" />
+          <Form.Item name="title" label="鏂规鏍囬">
+            <Input placeholder="???????" />
           </Form.Item>
-          <Form.Item name="route" label="推荐路线">
-            <Input placeholder="不填则按起运地、目的地和中亚口岸自动生成" />
+          <Form.Item name="route" label="鎺ㄨ崘璺嚎">
+            <Input placeholder="????????????????????" />
           </Form.Item>
           <Row gutter={12}>
             <Col span={8}>
-              <Form.Item name="transitDays" label="预计天数">
+              <Form.Item name="transitDays" label="棰勮澶╂暟">
                 <InputNumber min={1} style={{ width: '100%' }} />
               </Form.Item>
             </Col>
             <Col span={8}>
-              <Form.Item name="estimatedCost" label="预估费用">
+              <Form.Item name="estimatedCost" label="棰勪及璐圭敤">
                 <InputNumber min={0} style={{ width: '100%' }} />
               </Form.Item>
             </Col>
             <Col span={8}>
-              <Form.Item name="currency" label="币种" initialValue="USD">
+              <Form.Item name="currency" label="甯佺" initialValue="USD">
                 <Select options={['USD', 'CNY', 'KZT', 'EUR'].map((value) => ({ value, label: value }))} />
               </Form.Item>
             </Col>
           </Row>
-          <Form.Item name="planText" label="方案说明">
-            <TextArea rows={5} placeholder="不填则自动生成操作节点、风险提示和费用说明" />
+          <Form.Item name="planText" label="鏂规璇存槑">
+            <TextArea rows={5} placeholder="涓嶅～鍒欒嚜鍔ㄧ敓鎴愭搷浣滆妭鐐广€侀闄╂彁绀哄拰璐圭敤璇存槑" />
           </Form.Item>
         </Form>
       </Modal>
 
       <Modal
-        title={selectedInquiry ? `报价 ${selectedInquiry.inquiryNo}` : '报价'}
+        title={selectedInquiry ? `???? ${selectedInquiry.inquiryNo}` : '????'}
         open={quoteModalOpen}
         onCancel={() => setQuoteModalOpen(false)}
         onOk={() => quoteForm.submit()}
-        okText="提交报价"
+        okText="鎻愪氦鎶ヤ环"
         width={680}
       >
         <Form form={quoteForm} layout="vertical" initialValues={{ quoteCurrency: 'USD' }} onFinish={(values) => void submitQuote(values)}>
           <Row gutter={12}>
             <Col span={12}>
-              <Form.Item name="quoteAmount" label="报价金额">
+              <Form.Item name="quoteAmount" label="鎶ヤ环閲戦">
                 <InputNumber min={0} style={{ width: '100%' }} />
               </Form.Item>
             </Col>
             <Col span={12}>
-              <Form.Item name="quoteCurrency" label="币种">
+              <Form.Item name="quoteCurrency" label="甯佺">
                 <Select options={['USD', 'CNY', 'KZT', 'EUR'].map((value) => ({ value, label: value }))} />
               </Form.Item>
             </Col>
           </Row>
-          <Form.Item name="quoteRemark" label="报价说明">
-            <TextArea rows={4} placeholder="记录报价口径、时效、费用包含项、有效期等" />
+          <Form.Item name="quoteRemark" label="????">
+            <TextArea rows={4} placeholder="????????????????????" />
           </Form.Item>
           <Form.Item
             name="quoteUploadFiles"
-            label="上传报价"
+            label="涓婁紶鎶ヤ环"
             valuePropName="fileList"
             getValueFromEvent={(event) => event?.fileList ?? []}
           >
-            <Upload beforeUpload={() => false} multiple>
-              <Button icon={<UploadOutlined />}>选择报价文件</Button>
+            <Upload beforeUpload={beforeQuoteAttachmentUpload} multiple accept=".jpg,.jpeg,.png,.pdf">
+              <Button icon={<UploadOutlined />}>閫夋嫨鎶ヤ环鏂囦欢</Button>
             </Upload>
           </Form.Item>
           <Form.Item
             name="solutionUploadFiles"
-            label="上传运载方案"
+            label="涓婁紶鏂规闄勪欢"
             valuePropName="fileList"
             getValueFromEvent={(event) => event?.fileList ?? []}
           >
-            <Upload beforeUpload={() => false} multiple>
-              <Button icon={<UploadOutlined />}>选择运载方案文件</Button>
+            <Upload beforeUpload={beforeQuoteAttachmentUpload} multiple accept=".jpg,.jpeg,.png,.pdf">
+              <Button icon={<UploadOutlined />}>閫夋嫨鏂规闄勪欢</Button>
             </Upload>
           </Form.Item>
         </Form>
       </Modal>
 
       <Modal
-        title={editingEmployee ? '编辑员工' : '新增员工'}
+        title={editingCargo ? '编辑货物' : '新增货物'}
+        open={cargoModalOpen}
+        onCancel={() => {
+          setCargoModalOpen(false);
+          setEditingCargo(null);
+          cargoForm.resetFields();
+        }}
+        onOk={() => cargoForm.submit()}
+        okText="淇濆瓨"
+        width={760}
+      >
+        <Form
+          form={cargoForm}
+          layout="vertical"
+          onFinish={(values) => saveCargo(values)}
+          onValuesChange={(_, values) => {
+            const quantity = Number(values.quantity ?? 0);
+            const weightKg = Number(values.weightKg ?? 0);
+            const lengthCm = Number(values.lengthCm ?? 0);
+            const widthCm = Number(values.widthCm ?? 0);
+            const heightCm = Number(values.heightCm ?? 0);
+            if (quantity > 0 && weightKg > 0) {
+              cargoForm.setFieldValue('totalWeightKg', quantity * weightKg);
+            }
+            if (quantity > 0 && lengthCm > 0 && widthCm > 0 && heightCm > 0) {
+              cargoForm.setFieldValue('volumeCbm', (lengthCm * widthCm * heightCm * quantity) / 1_000_000_000);
+            }
+          }}
+          initialValues={{ quantity: 1, allowRotate: true, allowStack: false }}
+        >
+          <Row gutter={12}>
+            <Col span={8}>
+              <Form.Item name="boxNo" label="箱子序号" rules={[{ required: true, message: '请输入箱子序号' }]}>
+                <Input />
+              </Form.Item>
+            </Col>
+            <Col span={16}>
+              <Form.Item name="name" label="名称" rules={[{ required: true, message: '请输入名称' }]}>
+                <Input />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Row gutter={12}>
+            <Col span={8}>
+              <Form.Item name="lengthCm" label="长度(mm)" rules={[{ required: true, message: '请输入长度' }]}>
+                <InputNumber min={0.01} style={{ width: '100%' }} />
+              </Form.Item>
+            </Col>
+            <Col span={8}>
+              <Form.Item name="widthCm" label="宽度(mm)" rules={[{ required: true, message: '请输入宽度' }]}>
+                <InputNumber min={0.01} style={{ width: '100%' }} />
+              </Form.Item>
+            </Col>
+            <Col span={8}>
+              <Form.Item name="heightCm" label="高度(mm)" rules={[{ required: true, message: '请输入高度' }]}>
+                <InputNumber min={0.01} style={{ width: '100%' }} />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Row gutter={12}>
+            <Col span={8}>
+              <Form.Item name="quantity" label="数量" rules={[{ required: true, message: '请输入数量' }]}>
+                <InputNumber min={1} precision={0} style={{ width: '100%' }} />
+              </Form.Item>
+            </Col>
+            <Col span={8}>
+              <Form.Item name="weightKg" label="重量(kg)" rules={[{ required: true, message: '请输入重量' }]}>
+                <InputNumber min={0.01} style={{ width: '100%' }} />
+              </Form.Item>
+            </Col>
+            <Col span={8}>
+              <Form.Item name="totalWeightKg" label="总重量(kg)">
+                <InputNumber min={0.01} style={{ width: '100%' }} />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Row gutter={12}>
+            <Col span={8}>
+              <Form.Item name="volumeCbm" label="体积(立方)">
+                <InputNumber min={0.0001} style={{ width: '100%' }} />
+              </Form.Item>
+            </Col>
+            <Col span={8}>
+              <Form.Item name="allowRotate" valuePropName="checked">
+                <Checkbox>允许旋转</Checkbox>
+              </Form.Item>
+            </Col>
+            <Col span={8}>
+              <Form.Item name="allowStack" valuePropName="checked">
+                <Checkbox>允许堆叠</Checkbox>
+              </Form.Item>
+            </Col>
+          </Row>
+          <Form.Item name="remark" label="备注">
+            <TextArea rows={3} />
+          </Form.Item>
+          <Divider />
+          <Alert
+            type="info"
+            showIcon
+            message="当前配载算法使用有效长度、方数和载重约束；后续车辆补充宽度、高度字段后，可升级为三维配载。"
+          />
+        </Form>
+      </Modal>
+
+      <Modal
+        title={editingEmployee ? '缂栬緫鍛樺伐' : '鏂板鍛樺伐'}
         open={employeeModalOpen}
         onCancel={() => {
           setEmployeeModalOpen(false);
@@ -1115,28 +2347,31 @@ export default function App() {
         <Form form={employeeForm} layout="vertical" onFinish={(values) => void saveEmployee(values)}>
           <Row gutter={12}>
             <Col span={12}>
-              <Form.Item name="name" label="姓名" rules={[{ required: true, message: '请输入员工姓名' }]}>
+              <Form.Item name="name" label="??" rules={[{ required: true, message: '???????' }]}>
                 <Input />
               </Form.Item>
             </Col>
             <Col span={12}>
-              <Form.Item name="phone" label="电话">
+              <Form.Item name="phone" label="鐢佃瘽">
                 <Input />
               </Form.Item>
             </Col>
           </Row>
-          <Form.Item name="email" label="邮箱">
+          <Form.Item name="email" label="閭">
             <Input />
+          </Form.Item>
+          <Form.Item name="roleIds" label="角色">
+            <EmployeeRoleSelect />
           </Form.Item>
           <Row gutter={12}>
             <Col span={12}>
-              <Form.Item name="department" label="部门">
-                <Input placeholder="如：业务部、操作部、财务部" />
+              <Form.Item name="department" label="閮ㄩ棬">
+                <Input placeholder="濡傦細涓氬姟閮ㄣ€佹搷浣滈儴銆佽储鍔￠儴" />
               </Form.Item>
             </Col>
             <Col span={12}>
-              <Form.Item name="position" label="岗位">
-                <Input placeholder="如：业务员、操作、经理" />
+              <Form.Item name="position" label="宀椾綅">
+                <Input placeholder="Position" />
               </Form.Item>
             </Col>
           </Row>
@@ -1147,18 +2382,90 @@ export default function App() {
               </Form.Item>
             </Col>
             <Col span={12}>
-              <Form.Item name="status" label="状态" initialValue="ACTIVE">
+              <Form.Item name="status" label="??" initialValue="ACTIVE">
                 <Select
                   options={[
-                    { value: 'ACTIVE', label: '启用' },
-                    { value: 'INACTIVE', label: '停用' },
+                    { value: 'ACTIVE', label: '??' },
+                    { value: 'INACTIVE', label: '??' },
                   ]}
                 />
               </Form.Item>
             </Col>
           </Row>
-          <Form.Item name="notes" label="备注">
+          <Form.Item name="notes" label="澶囨敞">
             <TextArea rows={3} />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
+        title={editingVehicleType ? '编辑车型' : '新增车型'}
+        open={vehicleTypeModalOpen}
+        onCancel={() => {
+          setVehicleTypeModalOpen(false);
+          setEditingVehicleType(null);
+          vehicleTypeForm.resetFields();
+        }}
+        onOk={() => vehicleTypeForm.submit()}
+        okText="保存"
+        width={720}
+      >
+        <Form form={vehicleTypeForm} layout="vertical" onFinish={(values) => void saveVehicleType(values)}>
+          <Row gutter={12}>
+            <Col span={8}>
+              <Form.Item name="priceSort" label="价格排序">
+                <InputNumber min={1} precision={0} style={{ width: '100%' }} placeholder="数值越小越优先" />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Row gutter={12}>
+            <Col span={8}>
+              <Form.Item name="sequenceNo" label="序号">
+                <InputNumber min={0} style={{ width: '100%' }} />
+              </Form.Item>
+            </Col>
+            <Col span={8}>
+              <Form.Item name="category" label="分类" rules={[{ required: true, message: '请选择分类' }]}>
+                <Select options={vehicleCategoryOptions} />
+              </Form.Item>
+            </Col>
+            <Col span={8}>
+              <Form.Item name="name" label="车型名称" rules={[{ required: true, message: '请输入车型名称' }]}>
+                <Input />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Row gutter={12}>
+            <Col span={8}>
+              <Form.Item name="lineCount" label="线">
+                <InputNumber min={0} style={{ width: '100%' }} />
+              </Form.Item>
+            </Col>
+            <Col span={8}>
+              <Form.Item name="axleCount" label="轴">
+                <InputNumber min={0} style={{ width: '100%' }} />
+              </Form.Item>
+            </Col>
+            <Col span={8}>
+              <Form.Item name="payloadWeight" label="载重">
+                <InputNumber min={0} style={{ width: '100%' }} />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Row gutter={12}>
+            <Col span={12}>
+              <Form.Item name="effectiveLength" label="有效长度">
+                <InputNumber min={0} style={{ width: '100%' }} />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item name="effectiveVolume" label="有效方数">
+                <InputNumber min={0} style={{ width: '100%' }} />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Form.Item name="scenario" label="适用场景">
+            <TextArea rows={4} placeholder="例如：适合普通机械、冷链货物、大件超限运输等" />
           </Form.Item>
         </Form>
       </Modal>

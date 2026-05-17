@@ -127,6 +127,20 @@ a {
   box-shadow: 0 10px 22px rgba(22, 119, 255, 0.22);
 }
 
+.brand-logo-mark {
+  overflow: hidden;
+  background: #ffffff;
+  border: 1px solid #e5edf7;
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.1);
+}
+
+.brand-logo-mark img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
 .panel-copy {
   margin: 0 !important;
   color: #667085 !important;
@@ -497,6 +511,32 @@ a {
   max-width: 340px;
   line-height: 1.45;
   word-break: break-word;
+}
+
+.table-link-cell {
+  max-width: 160px;
+  padding-inline: 0 !important;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nowrap-cell {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+
+.route-cell {
+  display: inline-block;
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
 }
 
 .filter-card .ant-card-body {

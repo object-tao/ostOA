@@ -5,6 +5,8 @@ export type SessionUser = {
   realName: string;
   roleCode: string;
   roleName: string;
+  roles?: string[];
+  permissions?: string[];
 };
 
 const TOKEN_KEY = 'obiecrm-token';
@@ -12,6 +14,11 @@ const USER_KEY = 'obiecrm-user';
 
 export function getToken() {
   return localStorage.getItem(TOKEN_KEY);
+}
+
+export function hasPermission(code: string) {
+  const user = getSessionUser();
+  return user?.roleCode === 'ADMIN' || Boolean(user?.permissions?.includes(code));
 }
 
 export function saveSession(token: string, user: SessionUser) {

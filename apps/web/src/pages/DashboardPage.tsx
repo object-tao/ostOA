@@ -1,242 +1,259 @@
-import { Button, Card, Col, List, Row, Spin, Typography } from 'antd';
+import {
+  AlertOutlined,
+  CheckCircleOutlined,
+  ClockCircleOutlined,
+  FileTextOutlined,
+  FundOutlined,
+  ProjectOutlined,
+  RocketOutlined,
+  WalletOutlined,
+} from '@ant-design/icons';
+import { Card, Col, Empty, List, Progress, Row, Space, Statistic, Table, Tag, Timeline, Typography } from 'antd';
+import type { ColumnsType } from 'antd/es/table';
 import { useEffect, useState } from 'react';
-import { Area, AreaChart, Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { apiRequest } from '../api/client';
-import { PageHeader } from '../components/PageHeader';
-import welcomeBanner from '../styles/mantis-welcome-banner.png';
-import welcomeArrow from '../styles/mantis-welcome-arrow.png';
 
-type ProjectItem = {
-  id: string;
-  projectName: string;
-  projectStatus: string;
-  actualVehicleCount: number;
-  abnormalCount: number;
-  contractAmount: number;
+const { Text, Title } = Typography;
+
+type DashboardData = {
+  totals: {
+    inquiryCount: number;
+    pendingQuoteCount: number;
+    projectCount: number;
+    taskCount: number;
+    activeTaskCount: number;
+    todoCount: number;
+    exceptionCount: number;
+  };
+  finance: {
+    confirmedReceivable: number;
+    confirmedPayable: number;
+    grossProfit: number;
+    unreceived: number;
+    unpaid: number;
+  };
+  taskStatus: Array<{ status: string; count: number }>;
+  nodeStatus: Array<{ nodeName: string; count: number }>;
+  recentTasks: Array<{
+    id: string;
+    taskNo: string;
+    projectName: string;
+    customerName: string;
+    currentNode: string;
+    status: string;
+    progress: number;
+    updatedAt: string;
+  }>;
+  todos: Array<{
+    id: string;
+    title: string;
+    taskNo: string;
+    projectName: string;
+    customerName: string;
+    nodeName: string;
+    status: string;
+    createdAt: string;
+  }>;
+  trackingRecords: Array<{
+    id: string;
+    taskNo: string;
+    nodeName: string;
+    location?: string | null;
+    trackingStatus?: string | null;
+    content: string;
+    trackedAt: string;
+  }>;
 };
 
-type TransitOverview = {
-  totalVehicles: number;
-  abnormalVehicles: number;
-  activeAlerts: number;
+const emptyDashboard: DashboardData = {
+  totals: {
+    inquiryCount: 0,
+    pendingQuoteCount: 0,
+    projectCount: 0,
+    taskCount: 0,
+    activeTaskCount: 0,
+    todoCount: 0,
+    exceptionCount: 0,
+  },
+  finance: {
+    confirmedReceivable: 0,
+    confirmedPayable: 0,
+    grossProfit: 0,
+    unreceived: 0,
+    unpaid: 0,
+  },
+  taskStatus: [],
+  nodeStatus: [],
+  recentTasks: [],
+  todos: [],
+  trackingRecords: [],
 };
 
-const sparkData = [
-  { name: '1', value: 18 },
-  { name: '2', value: 20 },
-  { name: '3', value: 19 },
-  { name: '4', value: 17 },
-  { name: '5', value: 16 },
-  { name: '6', value: 12 },
-  { name: '7', value: 15 },
-  { name: '8', value: 18 },
-  { name: '9', value: 21 },
-  { name: '10', value: 23 },
-  { name: '11', value: 20 },
-  { name: '12', value: 18 },
-];
+function money(value: number | string | null | undefined) {
+  return Number(value ?? 0).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
 
-const projectStatusMap: Record<string, string> = {
-  DRAFT: '草稿',
-  IN_PROGRESS: '执行中',
-  COMPLETED: '已完成',
-  CLOSED: '已关闭',
-};
+function statusColor(status: string) {
+  if (['已完成', '完成', '已收款', '已付款'].includes(status)) return 'green';
+  if (['异常', '已退回', '作废'].includes(status)) return 'red';
+  if (['处理中', '运输中', '进行中'].includes(status)) return 'blue';
+  return 'default';
+}
 
 export function DashboardPage() {
-  const [projects, setProjects] = useState<ProjectItem[]>([]);
-  const [overview, setOverview] = useState<TransitOverview | null>(null);
-  const [todayInquiryCount, setTodayInquiryCount] = useState(0);
+  const [data, setData] = useState<DashboardData>(emptyDashboard);
+  const [loading, setLoading] = useState(false);
+
+  const loadData = async () => {
+    setLoading(true);
+    try {
+      setData(await apiRequest<DashboardData>('/api/dashboard'));
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
-    void Promise.all([
-      apiRequest<{ items: ProjectItem[] }>('/api/projects?page=1&pageSize=6'),
-      apiRequest<TransitOverview>('/api/in-transit/overview'),
-      apiRequest<{ items: Array<{ createdAt?: string }> }>('/api/inquiries?page=1&pageSize=100'),
-    ]).then(([projectData, overviewData, inquiryData]) => {
-      setProjects(projectData.items);
-      setOverview(overviewData);
-      const today = new Date().toLocaleDateString('zh-CN');
-      setTodayInquiryCount(
-        inquiryData.items.filter((item) => (item.createdAt ? item.createdAt.includes(today) : false)).length,
-      );
-    });
+    void loadData();
   }, []);
 
-  if (!overview) {
-    return <Spin />;
-  }
-
-  const totalIncome = projects.reduce((sum, item) => sum + item.contractAmount, 0);
-  const activeProjects = projects.filter((item) => item.projectStatus === 'IN_PROGRESS').length;
-  const chartData = projects.map((item) => ({
-    name: item.projectName.length > 8 ? `${item.projectName.slice(0, 8)}...` : item.projectName,
-    amount: item.contractAmount,
-  }));
+  const taskColumns: ColumnsType<DashboardData['recentTasks'][number]> = [
+    { title: '任务号', dataIndex: 'taskNo', width: 170 },
+    { title: '客户', dataIndex: 'customerName', width: 150, render: (value) => value || '-' },
+    { title: '项目', dataIndex: 'projectName', width: 180, render: (value) => value || '-' },
+    { title: '当前节点', dataIndex: 'currentNode', width: 120, render: (value) => value ? <Tag color="blue">{value}</Tag> : '-' },
+    { title: '状态', dataIndex: 'status', width: 110, render: (value) => <Tag color={statusColor(value)}>{value}</Tag> },
+    { title: '进度', dataIndex: 'progress', width: 140, render: (value) => <Progress percent={Number(value ?? 0)} size="small" /> },
+  ];
 
   return (
-    <>
-      <PageHeader title="分析总览" subtitle="项目、调度、在途和利润的统一分析视图。" />
+    <Space direction="vertical" size={16} style={{ width: '100%' }}>
+      <Card className="glass-card" bordered={false} loading={loading}>
+        <Row gutter={[18, 18]} align="middle">
+          <Col xs={24} lg={12}>
+            <Text type="secondary" style={{ letterSpacing: 2, fontWeight: 700 }}>
+              CENTRAL ASIA TRANSPORT
+            </Text>
+            <Title level={2} style={{ margin: '8px 0 0' }}>
+              运营中控台
+            </Title>
+            <Text type="secondary">聚合询单、项目、运输任务、流程待办、轨迹与财务毛利。</Text>
+          </Col>
+          <Col xs={24} lg={12}>
+            <Row gutter={[12, 12]}>
+              <Col span={8}>
+                <Statistic title="待报价" value={data.totals.pendingQuoteCount} prefix={<FileTextOutlined />} />
+              </Col>
+              <Col span={8}>
+                <Statistic title="待办" value={data.totals.todoCount} prefix={<ClockCircleOutlined />} />
+              </Col>
+              <Col span={8}>
+                <Statistic title="毛利" value={data.finance.grossProfit} precision={2} suffix="CNY" prefix={<WalletOutlined />} />
+              </Col>
+            </Row>
+          </Col>
+        </Row>
+      </Card>
 
-      <section className="mantis-hero">
-        <div className="mantis-hero-copy">
-          <Typography.Title className="mantis-hero-title">Welcome to Mantis Cargo</Typography.Title>
-          <Typography.Paragraph className="mantis-hero-text">
-            参考 Mantis Analytics 模板重构后的首页分析台。现在可以把询价单、项目、批次、车辆运输单、异常和利润放在同一套管理视图里。
-          </Typography.Paragraph>
-          <Button size="large" ghost>
-            查看完整统计
-          </Button>
-        </div>
-        <div className="mantis-hero-art">
-          <img src={welcomeBanner} alt="Mantis welcome banner" className="mantis-hero-banner" />
-          <img src={welcomeArrow} alt="Mantis arrow" className="mantis-hero-arrow" />
-        </div>
-      </section>
+      <Row gutter={[16, 16]}>
+        <Col xs={24} sm={12} xl={4}>
+          <Card className="metric-card"><Statistic title="询单总数" value={data.totals.inquiryCount} prefix={<FileTextOutlined />} /></Card>
+        </Col>
+        <Col xs={24} sm={12} xl={4}>
+          <Card className="metric-card"><Statistic title="项目管理" value={data.totals.projectCount} prefix={<ProjectOutlined />} /></Card>
+        </Col>
+        <Col xs={24} sm={12} xl={4}>
+          <Card className="metric-card"><Statistic title="运输任务" value={data.totals.taskCount} prefix={<RocketOutlined />} /></Card>
+        </Col>
+        <Col xs={24} sm={12} xl={4}>
+          <Card className="metric-card"><Statistic title="进行中任务" value={data.totals.activeTaskCount} prefix={<FundOutlined />} /></Card>
+        </Col>
+        <Col xs={24} sm={12} xl={4}>
+          <Card className="metric-card"><Statistic title="异常记录" value={data.totals.exceptionCount} prefix={<AlertOutlined />} /></Card>
+        </Col>
+        <Col xs={24} sm={12} xl={4}>
+          <Card className="metric-card"><Statistic title="待收/待付" value={`${money(data.finance.unreceived)} / ${money(data.finance.unpaid)}`} suffix="CNY" /></Card>
+        </Col>
+      </Row>
 
-      <Row gutter={[18, 18]} style={{ marginBottom: 24 }}>
-        <Col xs={24} md={12} xl={6}>
-          <Card className="mantis-card mantis-stat-card" bordered={false}>
-            <div className="mantis-stat-top">
-              <span className="mantis-stat-label">今日询价</span>
-              <span className="mantis-stat-chip blue">+12.0%</span>
-            </div>
-            <div className="mantis-stat-value">{todayInquiryCount}</div>
-            <div style={{ width: '100%', height: 96, marginTop: 14 }}>
-              <ResponsiveContainer>
-                <AreaChart data={sparkData}>
-                  <defs>
-                    <linearGradient id="inquiryFill" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor="#22c55e" stopOpacity={0.34} />
-                      <stop offset="100%" stopColor="#22c55e" stopOpacity={0} />
-                    </linearGradient>
-                  </defs>
-                  <Area type="monotone" dataKey="value" stroke="#16a34a" fill="url(#inquiryFill)" strokeWidth={2} />
-                </AreaChart>
-              </ResponsiveContainer>
-            </div>
+      <Row gutter={[16, 16]}>
+        <Col xs={24} xl={14}>
+          <Card className="glass-card" title="状态跟进" bordered={false}>
+            {data.nodeStatus.length ? (
+              <div style={{ height: 320 }}>
+                <ResponsiveContainer>
+                  <BarChart data={data.nodeStatus}>
+                    <CartesianGrid stroke="#eef2f7" vertical={false} />
+                    <XAxis dataKey="nodeName" tickLine={false} axisLine={false} />
+                    <YAxis allowDecimals={false} tickLine={false} axisLine={false} />
+                    <Tooltip />
+                    <Bar dataKey="count" name="任务数" fill="#1677ff" radius={[6, 6, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            ) : <Empty description="暂无节点任务" />}
           </Card>
         </Col>
-        <Col xs={24} md={12} xl={6}>
-          <Card className="mantis-card mantis-stat-card" bordered={false}>
-            <div className="mantis-stat-top">
-              <span className="mantis-stat-label">项目总数</span>
-              <span className="mantis-stat-chip blue">+18.4%</span>
-            </div>
-            <div className="mantis-stat-value">{projects.length}</div>
-            <div style={{ width: '100%', height: 96, marginTop: 14 }}>
-              <ResponsiveContainer>
-                <BarChart data={sparkData}>
-                  <Bar dataKey="value" fill="#3b82f6" radius={[4, 4, 0, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          </Card>
-        </Col>
-        <Col xs={24} md={12} xl={6}>
-          <Card className="mantis-card mantis-stat-card" bordered={false}>
-            <div className="mantis-stat-top">
-              <span className="mantis-stat-label">在途车辆</span>
-              <span className="mantis-stat-chip red">-6.2%</span>
-            </div>
-            <div className="mantis-stat-value">{overview.totalVehicles}</div>
-            <div style={{ width: '100%', height: 96, marginTop: 14 }}>
-              <ResponsiveContainer>
-                <AreaChart data={sparkData}>
-                  <defs>
-                    <linearGradient id="transitFill" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor="#ff6b6b" stopOpacity={0.38} />
-                      <stop offset="100%" stopColor="#ff6b6b" stopOpacity={0} />
-                    </linearGradient>
-                  </defs>
-                  <Area type="monotone" dataKey="value" stroke="#ff5b5b" fill="url(#transitFill)" strokeWidth={2} />
-                </AreaChart>
-              </ResponsiveContainer>
-            </div>
-          </Card>
-        </Col>
-        <Col xs={24} md={12} xl={6}>
-          <Card className="mantis-card mantis-stat-card" bordered={false}>
-            <div className="mantis-stat-top">
-              <span className="mantis-stat-label">合同总额</span>
-              <span className="mantis-stat-chip amber">+24.0%</span>
-            </div>
-            <div className="mantis-stat-value">¥{totalIncome.toLocaleString()}</div>
-            <div style={{ width: '100%', height: 96, marginTop: 14 }}>
-              <ResponsiveContainer>
-                <BarChart data={sparkData}>
-                  <Bar dataKey="value" fill="#f7b731" radius={[4, 4, 0, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          </Card>
-        </Col>
-        <Col xs={24} md={12} xl={6}>
-          <Card className="mantis-card mantis-stat-card" bordered={false}>
-            <div className="mantis-stat-top">
-              <span className="mantis-stat-label">当前预警</span>
-              <span className="mantis-stat-chip blue">+70.5%</span>
-            </div>
-            <div className="mantis-stat-value">{overview.activeAlerts}</div>
-            <div style={{ width: '100%', height: 96, marginTop: 14 }}>
-              <ResponsiveContainer>
-                <AreaChart data={sparkData}>
-                  <defs>
-                    <linearGradient id="alertFill" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor="#3b82f6" stopOpacity={0.34} />
-                      <stop offset="100%" stopColor="#3b82f6" stopOpacity={0} />
-                    </linearGradient>
-                  </defs>
-                  <Area type="monotone" dataKey="value" stroke="#2563eb" fill="url(#alertFill)" strokeWidth={2} />
-                </AreaChart>
-              </ResponsiveContainer>
-            </div>
+        <Col xs={24} xl={10}>
+          <Card className="glass-card" title="财务概览" bordered={false}>
+            <Space direction="vertical" size={16} style={{ width: '100%' }}>
+              <Row gutter={12}>
+                <Col span={12}><Statistic title="已确认应收" value={data.finance.confirmedReceivable} precision={2} suffix="CNY" /></Col>
+                <Col span={12}><Statistic title="已确认应付" value={data.finance.confirmedPayable} precision={2} suffix="CNY" /></Col>
+              </Row>
+              <Progress
+                percent={data.finance.confirmedReceivable ? Math.max(0, Math.min(100, Math.round((data.finance.grossProfit / data.finance.confirmedReceivable) * 100))) : 0}
+                strokeColor="#22c55e"
+              />
+              <Text type="secondary">毛利率按已确认应收/应付测算，后续可再细分到项目、客户和业务员。</Text>
+            </Space>
           </Card>
         </Col>
       </Row>
 
-      <Row gutter={[18, 18]}>
-        <Col xs={24} xl={16}>
-          <Card className="mantis-card" bordered={false}>
-            <div className="mantis-panel-title">经营收入概览</div>
-            <Typography.Text type="secondary">
-              当前执行中项目 {activeProjects} 个，对比样本项目合同额和整体经营趋势。
-            </Typography.Text>
-            <div style={{ width: '100%', height: 340, marginTop: 20 }}>
-              <ResponsiveContainer>
-                <BarChart data={chartData}>
-                  <CartesianGrid stroke="#eef2f7" vertical={false} />
-                  <XAxis dataKey="name" tickLine={false} axisLine={false} />
-                  <YAxis tickLine={false} axisLine={false} />
-                  <Tooltip />
-                  <Bar dataKey="amount" fill="#5aa2ff" radius={[8, 8, 0, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
+      <Row gutter={[16, 16]}>
+        <Col xs={24} xl={15}>
+          <Card className="glass-card" title="近期运输任务" bordered={false}>
+            <Table rowKey="id" dataSource={data.recentTasks} columns={taskColumns} pagination={false} scroll={{ x: 900 }} />
           </Card>
         </Col>
-
-        <Col xs={24} xl={8}>
-          <Card className="mantis-card mantis-list-card" bordered={false}>
-            <div className="mantis-panel-title">项目关注度排行</div>
+        <Col xs={24} xl={9}>
+          <Card className="glass-card" title="我的待办" bordered={false}>
             <List
-              itemLayout="horizontal"
-              dataSource={projects}
-              renderItem={(item, index) => (
+              dataSource={data.todos}
+              locale={{ emptyText: '暂无待办' }}
+              renderItem={(item) => (
                 <List.Item>
                   <List.Item.Meta
-                    title={item.projectName}
-                    description={`状态 ${projectStatusMap[item.projectStatus] ?? item.projectStatus} · 车辆 ${item.actualVehicleCount} · 异常 ${item.abnormalCount}`}
+                    avatar={<ClockCircleOutlined style={{ color: '#1677ff' }} />}
+                    title={<span>{item.title}</span>}
+                    description={`${item.customerName || '-'} · ${item.taskNo || '-'} · ${item.nodeName || '-'}`}
                   />
-                  <Typography.Text strong style={{ color: '#2563eb', fontSize: 24 }}>
-                    {7755 - index * 1488}
-                  </Typography.Text>
+                  <Tag color={statusColor(item.status)}>{item.status}</Tag>
                 </List.Item>
               )}
             />
           </Card>
         </Col>
       </Row>
-    </>
+
+      <Card className="glass-card" title="最新轨迹" bordered={false}>
+        {data.trackingRecords.length ? (
+          <Timeline
+            items={data.trackingRecords.map((item) => ({
+              dot: <CheckCircleOutlined />,
+              children: (
+                <Space direction="vertical" size={2}>
+                  <Text strong>{item.taskNo} · {item.nodeName} · {item.trackingStatus || '跟踪记录'}</Text>
+                  <Text>{item.content}</Text>
+                  <Text type="secondary">{item.location || '-'} · {item.trackedAt}</Text>
+                </Space>
+              ),
+            }))}
+          />
+        ) : <Empty description="暂无轨迹记录" />}
+      </Card>
+    </Space>
   );
 }
