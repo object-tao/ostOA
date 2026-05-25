@@ -3,6 +3,7 @@ import { Button, Card, Descriptions, Empty, Form, Input, Space, Table, Tag, Time
 import type { ColumnsType } from 'antd/es/table';
 import { PaperClipOutlined, SearchOutlined } from '@ant-design/icons';
 import { apiRequest } from '../api/client';
+import { beijingTimeValue, formatBeijingTime } from '../utils/date';
 
 const { Text } = Typography;
 
@@ -56,20 +57,11 @@ function fileUrl(value: string) {
 }
 
 function dateText(value?: string | null) {
-  if (!value) return '-';
-  const parsed = new Date(value.includes('T') ? value : value.replace(' ', 'T'));
-  if (Number.isFinite(parsed.getTime())) {
-    const pad = (input: number) => String(input).padStart(2, '0');
-    return `${parsed.getFullYear()}-${pad(parsed.getMonth() + 1)}-${pad(parsed.getDate())} ${pad(parsed.getHours())}:${pad(parsed.getMinutes())}`;
-  }
-  return value.replace('T', ' ').replace(/Z$/, '').slice(0, 16);
+  return formatBeijingTime(value);
 }
 
 function trackingTimeValue(value?: string | null) {
-  if (!value) return 0;
-  const normalized = value.includes('T') ? value : value.replace(' ', 'T');
-  const parsed = new Date(normalized).getTime();
-  return Number.isFinite(parsed) ? parsed : 0;
+  return beijingTimeValue(value);
 }
 
 function sortTrackingRecords(records?: TrackingRecord[]) {

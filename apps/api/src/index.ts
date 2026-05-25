@@ -1,4 +1,4 @@
-type Statement<T = Record<string, unknown>> = {
+﻿type Statement<T = Record<string, unknown>> = {
   bind(...values: unknown[]): Statement<T>;
   first<U = T>(): Promise<U | null>;
   all<U = T>(): Promise<{ results: U[] }>;
@@ -33,6 +33,10 @@ type Env = {
   ASSETS?: R2Bucket;
   AUTH_SECRET: string;
   CORS_ORIGIN?: string;
+  OPENAI_API_KEY?: string;
+  MARKET_IMPORT_TOKEN?: string;
+  GOOGLE_MAPS_API_KEY?: string;
+  TELEGRAM_BOT_TOKEN?: string;
 };
 
 type SessionUser = {
@@ -48,6 +52,27 @@ type SessionUser = {
 type LoginRequest = {
   email?: string;
   password?: string;
+};
+
+type LoadingAiConfigPayload = {
+  provider?: string;
+  apiBaseUrl?: string;
+  apiKey?: string;
+  model?: string;
+  enabled?: boolean;
+  systemPrompt?: string;
+  temperature?: number;
+  maxOutputTokens?: number;
+  notes?: string;
+};
+
+type MarketInfoPayload = {
+  collectedAt?: string;
+  whatsappNumber?: string;
+  sourceGroup?: string;
+  foreignText?: string;
+  chineseTranslation?: string;
+  rawPayload?: unknown;
 };
 
 type CustomerPayload = {
@@ -207,6 +232,8 @@ type WorkflowTemplateNodePayload = {
   sortOrder?: number | string | null;
   nodeType?: string;
   defaultOwner?: string;
+  defaultRoleId?: string;
+  defaultRoleName?: string;
   required?: boolean;
   allowSkip?: boolean;
   allowReturn?: boolean;
@@ -482,7 +509,7 @@ function json(data: unknown, init: ResponseInit = {}, corsOrigin = '*') {
   headers.set('content-type', 'application/json; charset=utf-8');
   headers.set('access-control-allow-origin', corsOrigin);
   headers.set('access-control-allow-methods', 'GET,POST,PATCH,DELETE,OPTIONS');
-  headers.set('access-control-allow-headers', 'content-type,authorization');
+  headers.set('access-control-allow-headers', 'content-type,authorization,x-market-token');
 
   return new Response(JSON.stringify(data), {
     ...init,
@@ -506,7 +533,12 @@ function corsOrigin(request: Request, env: Env) {
   if (origin) {
     try {
       const originUrl = new URL(origin);
-      if (originUrl.hostname === 'ostoa-web.pages.dev' || originUrl.hostname.endsWith('.ostoa-web.pages.dev')) {
+      if (
+        originUrl.hostname === 'ostoa-web.pages.dev' ||
+        originUrl.hostname.endsWith('.ostoa-web.pages.dev') ||
+        originUrl.hostname === 'ostoa-driver.pages.dev' ||
+        originUrl.hostname.endsWith('.ostoa-driver.pages.dev')
+      ) {
         return origin;
       }
     } catch {
@@ -700,6 +732,51 @@ async function sign(value: string, secret: string) {
   return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
 }
 
+async function hmacSha256Bytes(keyBytes: ArrayBuffer | Uint8Array, value: string) {
+  const rawKey = keyBytes instanceof Uint8Array ? keyBytes.slice().buffer : keyBytes;
+  const key = await crypto.subtle.importKey('raw', rawKey, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  return new Uint8Array(await crypto.subtle.sign('HMAC', key, encoder.encode(value)));
+}
+
+function toHex(bytes: Uint8Array) {
+  return [...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+function timingSafeEqualText(left: string, right: string) {
+  if (left.length !== right.length) return false;
+  let diff = 0;
+  for (let index = 0; index < left.length; index += 1) {
+    diff |= left.charCodeAt(index) ^ right.charCodeAt(index);
+  }
+  return diff === 0;
+}
+
+async function verifyTelegramInitData(initData: string, botToken: string) {
+  if (!initData || !botToken) return { ok: false, error: 'Telegram initData is required.' };
+  const params = new URLSearchParams(initData);
+  const hash = params.get('hash') ?? '';
+  if (!hash) return { ok: false, error: 'Telegram signature is missing.' };
+  params.delete('hash');
+  const dataCheckString = [...params.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, value]) => `${key}=${value}`)
+    .join('\n');
+  const secretKey = await hmacSha256Bytes(encoder.encode('WebAppData'), botToken);
+  const calculatedHash = toHex(await hmacSha256Bytes(secretKey, dataCheckString));
+  if (!timingSafeEqualText(calculatedHash, hash)) return { ok: false, error: 'Telegram signature is invalid.' };
+  const authDate = Number(params.get('auth_date'));
+  if (Number.isFinite(authDate) && authDate > 0) {
+    const ageSeconds = Math.floor(Date.now() / 1000) - authDate;
+    if (ageSeconds > 86400) return { ok: false, error: 'Telegram session expired.' };
+  }
+  const userRaw = params.get('user');
+  try {
+    return { ok: true, user: userRaw ? JSON.parse(userRaw) : null };
+  } catch {
+    return { ok: true, user: null };
+  }
+}
+
 async function createToken(user: SessionUser, secret: string) {
   const payload = {
     ...user,
@@ -890,6 +967,19 @@ async function saveRbacRole(env: Env, body: RbacRolePayload, roleId?: string) {
     }
   }
   return { ok: true, id };
+}
+
+async function deleteRbacRole(env: Env, roleId: string) {
+  const role = await env.DB.prepare('SELECT id, code, name FROM rbac_roles WHERE id = ?').bind(roleId).first<{ id: string; code: string; name: string }>();
+  if (!role) return { error: '角色不存在。' };
+  if (['admin', 'ADMIN'].includes(role.code)) return { error: '超级管理员角色不能删除。' };
+  await env.DB.prepare('DELETE FROM rbac_role_permissions WHERE role_id = ?').bind(roleId).run();
+  await env.DB.prepare('DELETE FROM employee_roles WHERE role_id = ?').bind(roleId).run();
+  await env.DB.prepare('UPDATE workflow_template_nodes SET default_role_id = NULL, default_role_name = NULL WHERE default_role_id = ?').bind(roleId).run();
+  await env.DB.prepare('UPDATE workflow_instance_nodes SET owner_role_id = NULL, owner_role_name = NULL WHERE owner_role_id = ?').bind(roleId).run();
+  await env.DB.prepare('UPDATE workflow_todos SET owner_role_id = NULL, owner_role_name = NULL WHERE owner_role_id = ?').bind(roleId).run();
+  await env.DB.prepare('DELETE FROM rbac_roles WHERE id = ?').bind(roleId).run();
+  return { ok: true };
 }
 
 async function updateEmployeeRoles(env: Env, employeeId: string, body: EmployeeRolePayload) {
@@ -1759,6 +1849,153 @@ async function createLoadingPlan(env: Env, body: LoadingPlanPayload) {
 
   await recordActivity(env, '保存配载方案', `保存配载方案 ${title}。`);
   return { id };
+}
+
+function maskSecret(value?: string | null) {
+  if (!value) return '';
+  if (value.length <= 10) return '已配置';
+  return `${value.slice(0, 6)}...${value.slice(-4)}`;
+}
+
+function mapLoadingAiConfig(row: Record<string, unknown> | null, env: Env) {
+  const dbKey = ensureString(row?.apiKey);
+  const envKey = ensureString(env.OPENAI_API_KEY);
+  const activeKey = dbKey || envKey;
+  return {
+    id: ensureString(row?.id) || 'default',
+    provider: ensureString(row?.provider) || 'openai',
+    apiBaseUrl: ensureString(row?.apiBaseUrl) || 'https://api.openai.com/v1/responses',
+    model: ensureString(row?.model) || 'gpt-4.1-mini',
+    enabled: row?.enabled === undefined ? true : Boolean(row.enabled),
+    systemPrompt: ensureString(row?.systemPrompt),
+    temperature: Number(row?.temperature ?? 0.2),
+    maxOutputTokens: Number(row?.maxOutputTokens ?? 2000),
+    notes: ensureString(row?.notes),
+    hasApiKey: Boolean(activeKey),
+    apiKeyMasked: maskSecret(activeKey),
+    keySource: dbKey ? '数据库配置' : envKey ? 'Cloudflare Secret' : '',
+    updatedAt: ensureString(row?.updatedAt),
+  };
+}
+
+async function getLoadingAiConfig(env: Env) {
+  const row = await env.DB.prepare(
+    `
+      SELECT
+        id,
+        provider,
+        api_base_url as apiBaseUrl,
+        api_key as apiKey,
+        model,
+        enabled,
+        system_prompt as systemPrompt,
+        temperature,
+        max_output_tokens as maxOutputTokens,
+        notes,
+        updated_at as updatedAt
+      FROM loading_ai_config
+      WHERE id = 'default'
+      LIMIT 1
+    `,
+  ).first<Record<string, unknown>>();
+  return mapLoadingAiConfig(row, env);
+}
+
+async function saveLoadingAiConfig(env: Env, body: LoadingAiConfigPayload) {
+  const current = await env.DB.prepare('SELECT api_key as apiKey FROM loading_ai_config WHERE id = ?').bind('default').first<{ apiKey?: string | null }>();
+  const provider = ensureString(body.provider) || 'openai';
+  const apiBaseUrl = ensureString(body.apiBaseUrl) || 'https://api.openai.com/v1/responses';
+  const model = ensureString(body.model) || 'gpt-4.1-mini';
+  const apiKey = ensureString(body.apiKey) || ensureString(current?.apiKey);
+  const now = isoNow();
+  await env.DB.prepare(
+    `
+      INSERT INTO loading_ai_config (
+        id, provider, api_base_url, api_key, model, enabled, system_prompt, temperature, max_output_tokens, notes, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        provider = excluded.provider,
+        api_base_url = excluded.api_base_url,
+        api_key = excluded.api_key,
+        model = excluded.model,
+        enabled = excluded.enabled,
+        system_prompt = excluded.system_prompt,
+        temperature = excluded.temperature,
+        max_output_tokens = excluded.max_output_tokens,
+        notes = excluded.notes,
+        updated_at = excluded.updated_at
+    `,
+  )
+    .bind(
+      'default',
+      provider,
+      apiBaseUrl,
+      apiKey || null,
+      model,
+      boolToInt(body.enabled, true),
+      ensureString(body.systemPrompt),
+      Number(body.temperature ?? 0.2),
+      Number(body.maxOutputTokens ?? 2000),
+      ensureString(body.notes),
+      now,
+      now,
+    )
+    .run();
+  return getLoadingAiConfig(env);
+}
+
+async function listMarketInfo(env: Env) {
+  const rows = await env.DB.prepare(
+    `
+      SELECT
+        id,
+        collected_at as collectedAt,
+        whatsapp_number as whatsappNumber,
+        source_group as sourceGroup,
+        foreign_text as foreignText,
+        chinese_translation as chineseTranslation,
+        status,
+        created_at as createdAt,
+        updated_at as updatedAt
+      FROM market_info
+      WHERE status != 'INVALID'
+      ORDER BY collected_at DESC, created_at DESC
+    `,
+  ).all<Record<string, unknown>>();
+  return rows.results;
+}
+
+async function createMarketInfo(env: Env, body: MarketInfoPayload) {
+  const foreignText = ensureString(body.foreignText);
+  if (!foreignText) return { error: '外语原文不能为空。' };
+  const id = createId('market');
+  const now = isoNow();
+  await env.DB.prepare(
+    `
+      INSERT INTO market_info (
+        id, collected_at, whatsapp_number, source_group, foreign_text, chinese_translation, status, raw_payload, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `,
+  )
+    .bind(
+      id,
+      ensureString(body.collectedAt) || now,
+      ensureString(body.whatsappNumber),
+      ensureString(body.sourceGroup),
+      foreignText,
+      ensureString(body.chineseTranslation),
+      'VALID',
+      body.rawPayload === undefined ? JSON.stringify(body) : JSON.stringify(body.rawPayload),
+      now,
+      now,
+    )
+    .run();
+  return { ok: true, id };
+}
+
+async function invalidateMarketInfo(env: Env, id: string) {
+  await env.DB.prepare('UPDATE market_info SET status = ?, updated_at = ? WHERE id = ?').bind('INVALID', isoNow(), id).run();
+  return { ok: true };
 }
 
 async function listTagGroups(env: Env) {
@@ -3114,6 +3351,7 @@ async function listOversizeProjects(env: Env) {
              workflow_instance_nodes.template_node_id as templateNodeId,
              workflow_instance_nodes.node_name as nodeName, workflow_instance_nodes.sort_order as sortOrder,
              workflow_instance_nodes.node_type as nodeType, workflow_instance_nodes.owner,
+             workflow_instance_nodes.owner_role_id as ownerRoleId, workflow_instance_nodes.owner_role_name as ownerRoleName,
              workflow_instance_nodes.status, workflow_instance_nodes.timeout_at as timeoutAt,
              workflow_instance_nodes.require_supplier as requireSupplier, workflow_instance_nodes.supplier_types as supplierTypes,
              workflow_instance_nodes.require_vehicle as requireVehicle, workflow_instance_nodes.require_driver as requireDriver,
@@ -4113,6 +4351,8 @@ function mapWorkflowTemplateNode(row: Record<string, unknown>) {
     sortOrder: row.sortOrder,
     nodeType: row.nodeType,
     defaultOwner: row.defaultOwner,
+    defaultRoleId: row.defaultRoleId,
+    defaultRoleName: row.defaultRoleName,
     required: Boolean(row.required),
     allowSkip: Boolean(row.allowSkip),
     allowReturn: Boolean(row.allowReturn),
@@ -4140,6 +4380,8 @@ function mapWorkflowInstanceNode(row: Record<string, unknown>) {
     sortOrder: row.sortOrder,
     nodeType: row.nodeType,
     owner: row.owner,
+    ownerRoleId: row.ownerRoleId,
+    ownerRoleName: row.ownerRoleName,
     status: row.status,
     required: Boolean(row.required),
     allowSkip: Boolean(row.allowSkip),
@@ -4185,7 +4427,8 @@ async function listWorkflowTemplates(env: Env) {
   const nodes = await env.DB.prepare(
     `
       SELECT id, template_id as templateId, node_name as nodeName, sort_order as sortOrder, node_type as nodeType,
-             default_owner as defaultOwner, required, allow_skip as allowSkip, allow_return as allowReturn,
+             default_owner as defaultOwner, default_role_id as defaultRoleId, default_role_name as defaultRoleName,
+             required, allow_skip as allowSkip, allow_return as allowReturn,
              require_customer_confirm as requireCustomerConfirm, require_attachment as requireAttachment,
              require_supplier as requireSupplier, supplier_types as supplierTypes, require_vehicle as requireVehicle,
              require_driver as requireDriver, timeout_hours as timeoutHours, description
@@ -4283,10 +4526,10 @@ async function createWorkflowTemplateNode(env: Env, templateId: string, body: Wo
   await env.DB.prepare(
     `
       INSERT INTO workflow_template_nodes (
-        id, template_id, node_name, sort_order, node_type, default_owner, required, allow_skip,
+        id, template_id, node_name, sort_order, node_type, default_owner, default_role_id, default_role_name, required, allow_skip,
         allow_return, require_customer_confirm, require_attachment, require_supplier, supplier_types,
         require_vehicle, require_driver, timeout_hours, description, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `,
   )
     .bind(
@@ -4296,6 +4539,8 @@ async function createWorkflowTemplateNode(env: Env, templateId: string, body: Wo
       toInteger(body.sortOrder) ?? 0,
       ensureString(body.nodeType) || '普通节点',
       ensureString(body.defaultOwner),
+      ensureString(body.defaultRoleId),
+      ensureString(body.defaultRoleName),
       boolToInt(body.required, true),
       boolToInt(body.allowSkip),
       boolToInt(body.allowReturn, true),
@@ -4320,7 +4565,7 @@ async function updateWorkflowTemplateNode(env: Env, nodeId: string, body: Workfl
   await env.DB.prepare(
     `
       UPDATE workflow_template_nodes
-      SET node_name = ?, sort_order = ?, node_type = ?, default_owner = ?, required = ?, allow_skip = ?,
+      SET node_name = ?, sort_order = ?, node_type = ?, default_owner = ?, default_role_id = ?, default_role_name = ?, required = ?, allow_skip = ?,
           allow_return = ?, require_customer_confirm = ?, require_attachment = ?, require_supplier = ?, supplier_types = ?,
           require_vehicle = ?, require_driver = ?, timeout_hours = ?, description = ?, updated_at = ?
       WHERE id = ?
@@ -4331,6 +4576,8 @@ async function updateWorkflowTemplateNode(env: Env, nodeId: string, body: Workfl
       toInteger(body.sortOrder) ?? 0,
       ensureString(body.nodeType) || '普通节点',
       ensureString(body.defaultOwner),
+      ensureString(body.defaultRoleId),
+      ensureString(body.defaultRoleName),
       boolToInt(body.required, true),
       boolToInt(body.allowSkip),
       boolToInt(body.allowReturn, true),
@@ -4426,16 +4673,68 @@ async function deleteWorkflowFileRequirement(env: Env, fileRequirementId: string
   return { ok: true };
 }
 
-async function createWorkflowTodo(env: Env, node: { id: string; instanceId: string; projectId: string; taskId: string; nodeName: string; owner?: string | null; timeoutAt?: string | null }) {
+async function resolveWorkflowTodoAssignee(
+  env: Env,
+  node: { projectId: string; owner?: string | null; ownerRoleId?: string | null; ownerRoleName?: string | null },
+) {
+  const owner = ensureString(node.owner);
+  if (owner) return { owner, ownerRoleId: '', ownerRoleName: '', assignmentSource: 'default_owner' };
+  const ownerRoleId = ensureString(node.ownerRoleId);
+  const ownerRoleName = ensureString(node.ownerRoleName);
+  if (ownerRoleId || ownerRoleName) return { owner: '', ownerRoleId, ownerRoleName, assignmentSource: 'default_role' };
+  const project = await env.DB.prepare('SELECT manager FROM oversize_projects WHERE id = ?').bind(node.projectId).first<{ manager?: string | null }>();
+  const projectManager = ensureString(project?.manager);
+  if (projectManager) return { owner: projectManager, ownerRoleId: '', ownerRoleName: '', assignmentSource: 'project_salesperson' };
+  const adminRole = await env.DB.prepare('SELECT id, name FROM rbac_roles WHERE code = ? LIMIT 1').bind('admin').first<{ id: string; name: string }>();
+  return {
+    owner: '',
+    ownerRoleId: adminRole?.id ?? 'role_admin',
+    ownerRoleName: adminRole?.name ?? '超级管理员',
+    assignmentSource: 'admin_fallback',
+  };
+}
+
+async function createWorkflowTodo(
+  env: Env,
+  node: {
+    id: string;
+    instanceId: string;
+    projectId: string;
+    taskId: string;
+    nodeName: string;
+    owner?: string | null;
+    ownerRoleId?: string | null;
+    ownerRoleName?: string | null;
+    timeoutAt?: string | null;
+  },
+) {
   const now = isoNow();
+  const assignee = await resolveWorkflowTodoAssignee(env, node);
   await env.DB.prepare(
     `
       INSERT INTO workflow_todos (
-        id, instance_id, instance_node_id, project_id, task_id, title, owner, due_at, status, priority, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        id, instance_id, instance_node_id, project_id, task_id, title, owner, owner_role_id, owner_role_name,
+        assignment_source, due_at, status, priority, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `,
   )
-    .bind(createId('wftd'), node.instanceId, node.id, node.projectId, node.taskId, `${node.nodeName}节点待处理`, node.owner ?? '', node.timeoutAt ?? null, '未处理', '普通', now, now)
+    .bind(
+      createId('wftd'),
+      node.instanceId,
+      node.id,
+      node.projectId,
+      node.taskId,
+      `${node.nodeName}节点待处理`,
+      assignee.owner,
+      assignee.ownerRoleId,
+      assignee.ownerRoleName,
+      assignee.assignmentSource,
+      node.timeoutAt ?? null,
+      '未处理',
+      '普通',
+      now,
+      now,
+    )
     .run();
 }
 
@@ -4467,6 +4766,7 @@ async function startWorkflowForTask(env: Env, taskId: string, templateId?: strin
   const templateNodes = await env.DB.prepare(
     `
       SELECT id, node_name as nodeName, sort_order as sortOrder, node_type as nodeType, default_owner as defaultOwner,
+             default_role_id as defaultRoleId, default_role_name as defaultRoleName,
              required, allow_skip as allowSkip, allow_return as allowReturn,
              require_customer_confirm as requireCustomerConfirm, require_supplier as requireSupplier,
              supplier_types as supplierTypes, require_vehicle as requireVehicle, require_driver as requireDriver,
@@ -4501,10 +4801,10 @@ async function startWorkflowForTask(env: Env, taskId: string, templateId?: strin
     await env.DB.prepare(
       `
         INSERT INTO workflow_instance_nodes (
-          id, instance_id, task_id, project_id, template_node_id, node_name, sort_order, node_type, owner,
+          id, instance_id, task_id, project_id, template_node_id, node_name, sort_order, node_type, owner, owner_role_id, owner_role_name,
           status, required, allow_skip, allow_return, require_customer_confirm, require_supplier, supplier_types,
           require_vehicle, require_driver, timeout_at, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
     )
       .bind(
@@ -4517,6 +4817,8 @@ async function startWorkflowForTask(env: Env, taskId: string, templateId?: strin
         node.sortOrder,
         node.nodeType,
         node.defaultOwner,
+        node.defaultRoleId,
+        node.defaultRoleName,
         index === 0 ? '待处理' : '未开始',
         node.required,
         node.allowSkip,
@@ -4534,10 +4836,10 @@ async function startWorkflowForTask(env: Env, taskId: string, templateId?: strin
   }
   await env.DB.prepare('UPDATE workflow_instances SET current_node_id = ?, updated_at = ? WHERE id = ?').bind(firstNodeId, isoNow(), instanceId).run();
   const firstNode = await env.DB.prepare(
-    'SELECT id, instance_id as instanceId, project_id as projectId, task_id as taskId, node_name as nodeName, owner, timeout_at as timeoutAt FROM workflow_instance_nodes WHERE id = ?',
+    'SELECT id, instance_id as instanceId, project_id as projectId, task_id as taskId, node_name as nodeName, owner, owner_role_id as ownerRoleId, owner_role_name as ownerRoleName, timeout_at as timeoutAt FROM workflow_instance_nodes WHERE id = ?',
   )
     .bind(firstNodeId)
-    .first<{ id: string; instanceId: string; projectId: string; taskId: string; nodeName: string; owner?: string | null; timeoutAt?: string | null }>();
+    .first<{ id: string; instanceId: string; projectId: string; taskId: string; nodeName: string; owner?: string | null; ownerRoleId?: string | null; ownerRoleName?: string | null; timeoutAt?: string | null }>();
   if (firstNode) await createWorkflowTodo(env, firstNode);
   return { id: instanceId };
 }
@@ -4829,7 +5131,7 @@ async function workflowNodeAction(env: Env, nodeId: string, action: string, body
   await saveWorkflowNodeData(env, nodeId, body);
 
   const now = isoNow();
-  let nextNode: { id: string; nodeName: string; owner?: string | null } | null = null;
+  let nextNode: { id: string; nodeName: string; owner?: string | null; ownerRoleId?: string | null; ownerRoleName?: string | null } | null = null;
   let nextStatus = node.status;
   let toNodeName = node.nodeName;
   let workflowCompleted = false;
@@ -4846,10 +5148,10 @@ async function workflowNodeAction(env: Env, nodeId: string, action: string, body
     await env.DB.prepare('UPDATE workflow_instance_nodes SET status = ?, completed_at = ?, notes = ?, updated_at = ? WHERE id = ?').bind(nextStatus, now, ensureString(body.remark), now, nodeId).run();
     await syncWorkflowNodePayable(env, nodeId);
     nextNode = await env.DB.prepare(
-      'SELECT id, node_name as nodeName, owner FROM workflow_instance_nodes WHERE instance_id = ? AND sort_order > ? AND status NOT IN (?, ?) ORDER BY sort_order ASC LIMIT 1',
+      'SELECT id, node_name as nodeName, owner, owner_role_id as ownerRoleId, owner_role_name as ownerRoleName FROM workflow_instance_nodes WHERE instance_id = ? AND sort_order > ? AND status NOT IN (?, ?) ORDER BY sort_order ASC LIMIT 1',
     )
       .bind(node.instanceId, node.sortOrder, '已跳过', '已完成')
-      .first<{ id: string; nodeName: string; owner?: string | null }>();
+      .first<{ id: string; nodeName: string; owner?: string | null; ownerRoleId?: string | null; ownerRoleName?: string | null }>();
     if (nextNode) {
       toNodeName = nextNode.nodeName;
       await env.DB.prepare('UPDATE workflow_instance_nodes SET status = ?, updated_at = ? WHERE id = ?').bind('待处理', now, nextNode.id).run();
@@ -4864,9 +5166,9 @@ async function workflowNodeAction(env: Env, nodeId: string, action: string, body
   } else if (action === 'return') {
     if (!node.allowReturn) return { error: '当前节点不允许退回。' };
     nextStatus = '已退回';
-    const prevNode = await env.DB.prepare('SELECT id, node_name as nodeName, owner FROM workflow_instance_nodes WHERE instance_id = ? AND sort_order < ? ORDER BY sort_order DESC LIMIT 1')
+    const prevNode = await env.DB.prepare('SELECT id, node_name as nodeName, owner, owner_role_id as ownerRoleId, owner_role_name as ownerRoleName FROM workflow_instance_nodes WHERE instance_id = ? AND sort_order < ? ORDER BY sort_order DESC LIMIT 1')
       .bind(node.instanceId, node.sortOrder)
-      .first<{ id: string; nodeName: string; owner?: string | null }>();
+      .first<{ id: string; nodeName: string; owner?: string | null; ownerRoleId?: string | null; ownerRoleName?: string | null }>();
     if (!prevNode) return { error: '没有可退回的上一节点。' };
     toNodeName = prevNode.nodeName;
     await env.DB.prepare('UPDATE workflow_instance_nodes SET status = ?, notes = ?, updated_at = ? WHERE id = ?').bind(nextStatus, ensureString(body.remark), now, nodeId).run();
@@ -4878,10 +5180,10 @@ async function workflowNodeAction(env: Env, nodeId: string, action: string, body
     nextStatus = '已跳过';
     await env.DB.prepare('UPDATE workflow_instance_nodes SET status = ?, notes = ?, updated_at = ? WHERE id = ?').bind(nextStatus, ensureString(body.remark), now, nodeId).run();
     nextNode = await env.DB.prepare(
-      'SELECT id, node_name as nodeName, owner FROM workflow_instance_nodes WHERE instance_id = ? AND sort_order > ? AND status NOT IN (?, ?) ORDER BY sort_order ASC LIMIT 1',
+      'SELECT id, node_name as nodeName, owner, owner_role_id as ownerRoleId, owner_role_name as ownerRoleName FROM workflow_instance_nodes WHERE instance_id = ? AND sort_order > ? AND status NOT IN (?, ?) ORDER BY sort_order ASC LIMIT 1',
     )
       .bind(node.instanceId, node.sortOrder, '已跳过', '已完成')
-      .first<{ id: string; nodeName: string; owner?: string | null }>();
+      .first<{ id: string; nodeName: string; owner?: string | null; ownerRoleId?: string | null; ownerRoleName?: string | null }>();
     if (nextNode) {
       toNodeName = nextNode.nodeName;
       await env.DB.prepare('UPDATE workflow_instance_nodes SET status = ?, updated_at = ? WHERE id = ?').bind('待处理', now, nextNode.id).run();
@@ -5155,7 +5457,9 @@ async function listWorkflowTodos(env: Env) {
     `
       SELECT workflow_todos.id, workflow_todos.instance_id as instanceId, workflow_todos.instance_node_id as instanceNodeId,
              workflow_todos.project_id as projectId, workflow_todos.task_id as taskId,
-             workflow_todos.title, workflow_todos.owner, workflow_todos.due_at as dueAt,
+             workflow_todos.title, workflow_todos.owner,
+             workflow_todos.owner_role_id as ownerRoleId, workflow_todos.owner_role_name as ownerRoleName,
+             workflow_todos.assignment_source as assignmentSource, workflow_todos.due_at as dueAt,
              workflow_todos.status, workflow_todos.priority, workflow_todos.created_at as createdAt,
              oversize_projects.name as projectName, oversize_projects.customer_name as customerName,
              oversize_project_tasks.task_no as taskNo, workflow_instance_nodes.node_name as nodeName
@@ -5364,6 +5668,256 @@ async function createAttachment(env: Env, entityType: 'customer' | 'contact', en
   return { ok: true };
 }
 
+function publicUploadUrl(request: Request, key: string) {
+  const url = new URL(request.url);
+  return `${url.origin}/api/uploads/${encodeURIComponent(key)}`;
+}
+
+function xmlEscape(value: unknown) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function beijingTimeText(date = new Date()) {
+  return new Intl.DateTimeFormat('zh-CN', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  }).format(date);
+}
+
+type GoogleAddress = {
+  formattedAddress: string;
+  country?: string;
+  city?: string;
+  raw?: unknown;
+};
+
+function parseGoogleAddress(data: any): GoogleAddress {
+  const result = Array.isArray(data?.results) ? data.results[0] : null;
+  const components = Array.isArray(result?.address_components) ? result.address_components : [];
+  const findComponent = (...types: string[]) =>
+    components.find((component: any) => Array.isArray(component.types) && types.some((type) => component.types.includes(type)))?.long_name ?? '';
+  return {
+    formattedAddress: ensureString(result?.formatted_address),
+    country: findComponent('country'),
+    city: findComponent('locality', 'administrative_area_level_1', 'administrative_area_level_2'),
+    raw: data,
+  };
+}
+
+async function reverseGeocode(env: Env, latitude: number, longitude: number, language: 'ru' | 'zh-CN') {
+  if (!env.GOOGLE_MAPS_API_KEY) {
+    return { formattedAddress: '', raw: { skipped: 'GOOGLE_MAPS_API_KEY is not configured' } } satisfies GoogleAddress;
+  }
+  const url = new URL('https://maps.googleapis.com/maps/api/geocode/json');
+  url.searchParams.set('latlng', `${latitude},${longitude}`);
+  url.searchParams.set('language', language);
+  url.searchParams.set('key', env.GOOGLE_MAPS_API_KEY);
+  const response = await fetch(url.toString());
+  if (!response.ok) return { formattedAddress: '', raw: { error: `Google geocode failed: ${response.status}` } } satisfies GoogleAddress;
+  return parseGoogleAddress(await response.json());
+}
+
+async function saveStaticMap(env: Env, request: Request, checkpointId: string, latitude: number, longitude: number) {
+  if (!env.ASSETS || !env.GOOGLE_MAPS_API_KEY) return { key: '', url: '' };
+  const mapUrl = new URL('https://maps.googleapis.com/maps/api/staticmap');
+  mapUrl.searchParams.set('center', `${latitude},${longitude}`);
+  mapUrl.searchParams.set('zoom', '13');
+  mapUrl.searchParams.set('size', '360x220');
+  mapUrl.searchParams.set('scale', '2');
+  mapUrl.searchParams.set('language', 'ru');
+  mapUrl.searchParams.set('markers', `color:red|${latitude},${longitude}`);
+  mapUrl.searchParams.set('key', env.GOOGLE_MAPS_API_KEY);
+  const response = await fetch(mapUrl.toString());
+  if (!response.ok) return { key: '', url: '' };
+  const key = `driver-checkpoints/${checkpointId}-map.png`;
+  await env.ASSETS.put(key, await response.arrayBuffer(), { httpMetadata: { contentType: 'image/png' } });
+  return { key, url: publicUploadUrl(request, key) };
+}
+
+function createWatermarkSvg(input: {
+  originalImageUrl: string;
+  mapImageUrl?: string;
+  timeText: string;
+  addressRu: string;
+  addressZh: string;
+  latitude: number;
+  longitude: number;
+  plateNo?: string;
+}) {
+  const lines = [
+    `Время: ${input.timeText}`,
+    `Место: ${input.addressRu || '-'}`,
+    `地点: ${input.addressZh || '-'}`,
+    `Координаты: ${input.latitude.toFixed(6)}, ${input.longitude.toFixed(6)}`,
+    `Номер машины: ${input.plateNo || 'Не распознано'}`,
+  ];
+  const textSpans = lines
+    .map((line, index) => `<text x="44" y="${720 - (lines.length - index - 1) * 34}" fill="#fff" font-size="24" font-family="Arial, sans-serif">${xmlEscape(line)}</text>`)
+    .join('\n');
+  const map = input.mapImageUrl
+    ? `<image href="${xmlEscape(input.mapImageUrl)}" x="844" y="36" width="360" height="220" preserveAspectRatio="xMidYMid slice"/><rect x="844" y="36" width="360" height="220" fill="none" stroke="#fff" stroke-width="4"/>`
+    : '';
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1240" height="800" viewBox="0 0 1240 800">
+  <rect width="1240" height="800" fill="#111827"/>
+  <image href="${xmlEscape(input.originalImageUrl)}" x="0" y="0" width="1240" height="800" preserveAspectRatio="xMidYMid slice"/>
+  <rect x="24" y="532" width="850" height="232" rx="24" fill="#000" opacity="0.62"/>
+  ${textSpans}
+  ${map}
+</svg>`;
+}
+
+function recognizePlatePlaceholder() {
+  return '';
+}
+
+async function uploadDriverCheckpoint(env: Env, request: Request) {
+  if (!env.ASSETS) return { error: 'R2 bucket is not configured yet.' };
+  const formData = await request.formData();
+  const image = formData.get('image_file');
+  if (!(image instanceof File)) return { error: 'image_file is required.' };
+  const tgId = ensureString(formData.get('tg_id'));
+  if (!tgId) return { error: 'tg_id is required.' };
+  const initData = ensureString(formData.get('init_data'));
+  if (env.TELEGRAM_BOT_TOKEN) {
+    const verified = await verifyTelegramInitData(initData, env.TELEGRAM_BOT_TOKEN);
+    if (!verified.ok) return { error: verified.error };
+    const verifiedTgId = verified.user?.id ? String(verified.user.id) : '';
+    if (verifiedTgId && verifiedTgId !== tgId) return { error: 'Telegram user does not match tg_id.' };
+  }
+  const latitude = Number(formData.get('latitude'));
+  const longitude = Number(formData.get('longitude'));
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return { error: 'GPS coordinates are required.' };
+
+  const checkpointId = createId('drvcp');
+  const now = new Date();
+  const checkinAt = now.toISOString();
+  const timeText = beijingTimeText(now);
+  const originalExt = image.type.includes('png') ? 'png' : 'jpg';
+  const originalKey = `driver-checkpoints/${checkpointId}-original.${originalExt}`;
+  await env.ASSETS.put(originalKey, await image.arrayBuffer(), {
+    httpMetadata: { contentType: image.type || 'image/jpeg' },
+  });
+  const originalImageUrl = publicUploadUrl(request, originalKey);
+
+  const [addressRu, addressZh, mapImage] = await Promise.all([
+    reverseGeocode(env, latitude, longitude, 'ru'),
+    reverseGeocode(env, latitude, longitude, 'zh-CN'),
+    saveStaticMap(env, request, checkpointId, latitude, longitude),
+  ]);
+  const plateNo = recognizePlatePlaceholder();
+  const svg = createWatermarkSvg({
+    originalImageUrl,
+    mapImageUrl: mapImage.url,
+    timeText,
+    addressRu: addressRu.formattedAddress,
+    addressZh: addressZh.formattedAddress,
+    latitude,
+    longitude,
+    plateNo,
+  });
+  const watermarkedKey = `driver-checkpoints/${checkpointId}-watermarked.svg`;
+  const svgBytes = encoder.encode(svg);
+  await env.ASSETS.put(watermarkedKey, svgBytes.buffer.slice(svgBytes.byteOffset, svgBytes.byteOffset + svgBytes.byteLength), {
+    httpMetadata: { contentType: 'image/svg+xml; charset=utf-8' },
+  });
+  const watermarkedImageUrl = publicUploadUrl(request, watermarkedKey);
+
+  await env.DB.prepare(
+    `
+      INSERT INTO driver_checkpoints (
+        id, tg_id, tg_name, latitude, longitude, checkin_at, address_ru, address_zh,
+        country_ru, country_zh, city_ru, city_zh, plate_no,
+        original_image_key, original_image_url, watermarked_image_key, watermarked_image_url,
+        map_image_key, map_image_url, raw_google_ru, raw_google_zh, status, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `,
+  )
+    .bind(
+      checkpointId,
+      tgId,
+      ensureString(formData.get('tg_name')),
+      latitude,
+      longitude,
+      checkinAt,
+      addressRu.formattedAddress,
+      addressZh.formattedAddress,
+      addressRu.country || '',
+      addressZh.country || '',
+      addressRu.city || '',
+      addressZh.city || '',
+      plateNo,
+      originalKey,
+      originalImageUrl,
+      watermarkedKey,
+      watermarkedImageUrl,
+      mapImage.key,
+      mapImage.url,
+      JSON.stringify(addressRu.raw ?? {}),
+      JSON.stringify(addressZh.raw ?? {}),
+      'VALID',
+      checkinAt,
+      checkinAt,
+    )
+    .run();
+
+  return {
+    ok: true,
+    id: checkpointId,
+    tgId,
+    checkinAt,
+    timeText,
+    latitude,
+    longitude,
+    addressRu: addressRu.formattedAddress,
+    addressZh: addressZh.formattedAddress,
+    plateNo,
+    originalImageUrl,
+    watermarkedImageUrl,
+    mapImageUrl: mapImage.url,
+  };
+}
+
+async function listDriverCheckpoints(env: Env) {
+  const rows = await env.DB.prepare(
+    `
+      SELECT
+        id,
+        tg_id as tgId,
+        tg_name as tgName,
+        latitude,
+        longitude,
+        checkin_at as checkinAt,
+        address_ru as addressRu,
+        address_zh as addressZh,
+        country_ru as countryRu,
+        country_zh as countryZh,
+        city_ru as cityRu,
+        city_zh as cityZh,
+        plate_no as plateNo,
+        original_image_url as originalImageUrl,
+        watermarked_image_url as watermarkedImageUrl,
+        map_image_url as mapImageUrl,
+        status,
+        created_at as createdAt
+      FROM driver_checkpoints
+      ORDER BY checkin_at DESC, created_at DESC
+      LIMIT 200
+    `,
+  ).all<Record<string, unknown>>();
+  return rows.results;
+}
+
 async function uploadFileToR2(env: Env, file: File, folder: string) {
   if (!env.ASSETS) {
     return { error: 'R2 bucket is not configured yet.' };
@@ -5396,7 +5950,7 @@ export default {
       const headers = new Headers();
       headers.set('access-control-allow-origin', origin);
       headers.set('access-control-allow-methods', 'GET,POST,PATCH,DELETE,OPTIONS');
-      headers.set('access-control-allow-headers', 'content-type,authorization');
+      headers.set('access-control-allow-headers', 'content-type,authorization,x-market-token');
       return new Response(null, { status: 204, headers });
     }
 
@@ -5479,6 +6033,21 @@ export default {
       return json({ token, user: enrichedSessionUser }, { status: 200 }, origin);
     }
 
+    if (url.pathname === '/api/market-info/collect' && request.method === 'POST') {
+      const expectedToken = ensureString(env.MARKET_IMPORT_TOKEN);
+      const providedToken = ensureString(request.headers.get('x-market-token')) || ensureString(request.headers.get('authorization')).replace(/^Bearer\s+/i, '');
+      if (expectedToken && providedToken !== expectedToken) return unauthorized(origin);
+      const result = await createMarketInfo(env, await parseBody<MarketInfoPayload>(request));
+      if (result.error !== undefined) return badRequest(origin, result.error);
+      return json(result, { status: 201 }, origin);
+    }
+
+    if (url.pathname === '/api/driver/upload-checkpoint' && request.method === 'POST') {
+      const result = await uploadDriverCheckpoint(env, request);
+      if (result.error !== undefined) return badRequest(origin, result.error);
+      return json(result, { status: 201 }, origin);
+    }
+
     const sessionUser = await getUserFromRequest(request, env);
     if (!sessionUser) {
       return unauthorized(origin);
@@ -5487,6 +6056,10 @@ export default {
     if (url.pathname === '/api/auth/me' && request.method === 'GET') {
       const rbac = await getUserRbac(env, sessionUser);
       return json({ user: { ...sessionUser, roles: rbac.roles, permissions: rbac.permissions, roleName: rbac.roles.length ? rbac.roles.join('、') : sessionUser.roleName } }, { status: 200 }, origin);
+    }
+
+    if (url.pathname === '/api/driver/checkpoints' && request.method === 'GET') {
+      return json({ items: await listDriverCheckpoints(env) }, { status: 200 }, origin);
     }
 
     if (url.pathname === '/api/rbac/permissions' && request.method === 'GET') {
@@ -5512,6 +6085,31 @@ export default {
       const result = await saveRbacRole(env, await parseBody<RbacRolePayload>(request), rbacRoleMatch[1]);
       if (result.error !== undefined) return badRequest(origin, result.error);
       return json(result, { status: 200 }, origin);
+    }
+
+    if (rbacRoleMatch && request.method === 'DELETE') {
+      if (!isAdminUser(sessionUser)) return unauthorized(origin);
+      const result = await deleteRbacRole(env, rbacRoleMatch[1]);
+      if (result.error !== undefined) return badRequest(origin, result.error);
+      return json(result, { status: 200 }, origin);
+    }
+
+    if (url.pathname === '/api/loading-ai-config' && request.method === 'GET') {
+      return json(await getLoadingAiConfig(env), { status: 200 }, origin);
+    }
+
+    if (url.pathname === '/api/loading-ai-config' && request.method === 'PUT') {
+      const result = await saveLoadingAiConfig(env, await parseBody<LoadingAiConfigPayload>(request));
+      return json(result, { status: 200 }, origin);
+    }
+
+    if (url.pathname === '/api/market-info' && request.method === 'GET') {
+      return json({ items: await listMarketInfo(env) }, { status: 200 }, origin);
+    }
+
+    const marketInfoMatch = url.pathname.match(/^\/api\/market-info\/([^/]+)$/);
+    if (marketInfoMatch && request.method === 'DELETE') {
+      return json(await invalidateMarketInfo(env, marketInfoMatch[1]), { status: 200 }, origin);
     }
 
     const employeeRolesMatch = url.pathname.match(/^\/api\/employees\/([^/]+)\/roles$/);

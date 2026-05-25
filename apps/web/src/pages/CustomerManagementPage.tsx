@@ -1,6 +1,7 @@
 import { Button, Card, Col, Form, Input, Modal, Popconfirm, Row, Space, Statistic, Table, message } from 'antd';
 import { useEffect, useMemo, useState } from 'react';
 import { apiRequest } from '../api/client';
+import { formatBeijingTime } from '../utils/date';
 import { PageHeader } from '../components/PageHeader';
 
 type Customer = {
@@ -149,7 +150,7 @@ export function CustomerManagementPage() {
             { title: '联系人', dataIndex: 'contactPerson', width: 140, render: (value) => value || '-' },
             { title: '地址', dataIndex: 'address', render: (value) => value || '-' },
             { title: '备注', dataIndex: 'remark', render: (value) => value || '-' },
-            { title: '创建时间', dataIndex: 'createdAt', width: 180, render: (value) => value || '-' },
+            { title: '创建时间', dataIndex: 'createdAt', width: 180, render: (value) => formatBeijingTime(value, true) },
             {
               title: '操作',
               key: 'actions',

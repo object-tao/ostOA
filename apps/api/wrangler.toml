@@ -17,4 +17,5 @@ bucket_name = "ostoa-assets"
 preview_bucket_name = "ostoa-assets-preview"
 
 [vars]
-CORS_ORIGIN = "https://admin.ostoa.org,https://ostoa.org,https://www.ostoa.org,https://ostoa-web.pages.dev"
+CORS_ORIGIN = "https://admin.ostoa.org,https://driver.ostoa.org,https://m.ostoa.org,https://ostoa.org,https://www.ostoa.org,https://ostoa-web.pages.dev,https://ostoa-driver.pages.dev"
+OPENAI_MODEL = "gpt-4.1-mini"

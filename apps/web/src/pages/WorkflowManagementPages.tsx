@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+﻿import { useEffect, useMemo, useState } from 'react';
 import {
   Button,
   Card,
@@ -21,6 +21,7 @@ import {
 import type { ColumnsType } from 'antd/es/table';
 import { DeleteOutlined, EditOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons';
 import { apiRequest } from '../api/client';
+import { formatBeijingTime } from '../utils/date';
 
 type WorkflowTemplateNode = {
   id: string;
@@ -29,6 +30,8 @@ type WorkflowTemplateNode = {
   sortOrder: number;
   nodeType: string;
   defaultOwner?: string | null;
+  defaultRoleId?: string | null;
+  defaultRoleName?: string | null;
   required: boolean;
   allowSkip: boolean;
   allowReturn: boolean;
@@ -86,6 +89,13 @@ type EmployeeOption = {
   status: string;
 };
 
+type RbacRoleOption = {
+  id: string;
+  code: string;
+  name: string;
+  enabled: boolean;
+};
+
 type WorkflowTodo = {
   id: string;
   instanceId?: string | null;
@@ -94,6 +104,9 @@ type WorkflowTodo = {
   taskId?: string | null;
   title: string;
   owner?: string | null;
+  ownerRoleId?: string | null;
+  ownerRoleName?: string | null;
+  assignmentSource?: string | null;
   dueAt?: string | null;
   status: string;
   priority: string;
@@ -135,6 +148,7 @@ function stringArrayValue(value: unknown) {
 export function WorkflowTemplatePage() {
   const [templates, setTemplates] = useState<WorkflowTemplate[]>([]);
   const [employees, setEmployees] = useState<EmployeeOption[]>([]);
+  const [roles, setRoles] = useState<RbacRoleOption[]>([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [templateModal, setTemplateModal] = useState<FormMode<WorkflowTemplate>>({ open: false });
@@ -164,15 +178,28 @@ export function WorkflowTemplatePage() {
     [employees],
   );
 
+  const roleOptions = useMemo(
+    () =>
+      roles
+        .filter((item) => item.enabled)
+        .map((item) => ({
+          value: item.id,
+          label: `${item.name} / ${item.code}`,
+        })),
+    [roles],
+  );
+
   const loadTemplates = async () => {
     setLoading(true);
     try {
-      const [result, employeeResult] = await Promise.all([
+      const [result, employeeResult, roleResult] = await Promise.all([
         apiRequest<{ items: WorkflowTemplate[] }>('/api/workflow/templates'),
         apiRequest<{ items: EmployeeOption[] }>('/api/employees'),
+        apiRequest<{ items: RbacRoleOption[] }>('/api/rbac/roles'),
       ]);
       setTemplates(result.items ?? []);
       setEmployees(employeeResult.items ?? []);
+      setRoles(roleResult.items ?? []);
     } catch (error) {
       message.error((error as Error).message);
     } finally {
@@ -239,12 +266,14 @@ export function WorkflowTemplatePage() {
     const values = await nodeForm.validateFields();
     setSaving(true);
     try {
+      const defaultRole = roles.find((role) => role.id === values.defaultRoleId);
       await apiRequest(nodeModal.record ? `/api/workflow/template-nodes/${nodeModal.record.id}` : `/api/workflow/templates/${selectedTemplate.id}/nodes`, {
         method: nodeModal.record ? 'PUT' : 'POST',
         body: JSON.stringify({
           ...values,
           nodeName: values.workflowNodeName,
           nodeType: values.workflowNodeType,
+          defaultRoleName: defaultRole?.name ?? '',
           workflowNodeName: undefined,
           workflowNodeType: undefined,
         }),
@@ -346,7 +375,7 @@ export function WorkflowTemplatePage() {
     { title: '节点数量', width: 100, render: (_, record) => record.nodes?.length ?? 0 },
     { title: '状态', dataIndex: 'enabled', width: 100, render: (value) => <Tag color={value ? 'success' : 'default'}>{value ? '启用' : '停用'}</Tag> },
     { title: '创建人', dataIndex: 'createdBy', width: 120 },
-    { title: '更新时间', dataIndex: 'updatedAt', width: 180 },
+    { title: '更新时间', dataIndex: 'updatedAt', width: 180, render: (value) => formatBeijingTime(value, true) },
     {
       title: '操作',
       width: 180,
@@ -371,6 +400,7 @@ export function WorkflowTemplatePage() {
     { title: '节点名称', dataIndex: 'nodeName', width: 160 },
     { title: '节点类型', dataIndex: 'nodeType', width: 120 },
     { title: '默认负责人', dataIndex: 'defaultOwner', width: 130 },
+    { title: '默认角色', dataIndex: 'defaultRoleName', width: 130, render: (value) => value || '-' },
     { title: '必经', dataIndex: 'required', width: 80, render: (value) => (value ? '是' : '否') },
     { title: '可跳过', dataIndex: 'allowSkip', width: 90, render: (value) => (value ? '是' : '否') },
     { title: '可退回', dataIndex: 'allowReturn', width: 90, render: (value) => (value ? '是' : '否') },
@@ -565,6 +595,11 @@ export function WorkflowTemplatePage() {
               </Form.Item>
             </Col>
             <Col span={8}>
+              <Form.Item name="defaultRoleId" label="默认角色">
+                <Select allowClear showSearch optionFilterProp="label" options={roleOptions} placeholder="请选择默认角色" />
+              </Form.Item>
+            </Col>
+            <Col span={8}>
               <Form.Item name="timeoutHours" label="超时时间/小时">
                 <InputNumber min={0} precision={0} style={{ width: '100%' }} />
               </Form.Item>
@@ -743,11 +778,15 @@ export function WorkflowTodoPage({ onOpenTask }: { onOpenTask?: (todo: WorkflowT
     { title: '项目名称', dataIndex: 'projectName', width: 220 },
     { title: '任务号', dataIndex: 'taskNo', width: 170 },
     { title: '节点', dataIndex: 'nodeName', width: 130 },
-    { title: '负责人', dataIndex: 'owner', width: 120 },
-    { title: '截止时间', dataIndex: 'dueAt', width: 170 },
+    {
+      title: '指派给',
+      width: 160,
+      render: (_, record) => record.owner || record.ownerRoleName || '-',
+    },
+    { title: '截止时间', dataIndex: 'dueAt', width: 170, render: (value) => formatBeijingTime(value, true) },
     { title: '优先级', dataIndex: 'priority', width: 100 },
     { title: '状态', dataIndex: 'status', width: 100, render: (value) => <Tag color={value === '未处理' ? 'warning' : 'success'}>{value}</Tag> },
-    { title: '创建时间', dataIndex: 'createdAt', width: 170 },
+    { title: '创建时间', dataIndex: 'createdAt', width: 170, render: (value) => formatBeijingTime(value, true) },
     {
       title: '操作',
       width: 220,

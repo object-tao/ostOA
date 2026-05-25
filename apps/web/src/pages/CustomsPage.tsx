@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { apiRequest } from '../api/client';
 import { PageHeader } from '../components/PageHeader';
+import { formatBeijingTime } from '../utils/date';
 
 const originOptions = [
   { label: 'World / MFN', value: '' },
@@ -62,7 +63,7 @@ function exportHistoryCsv(rows: any[]) {
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.href = url;
-  link.download = `tajikistan-tariff-history-${new Date().toISOString().slice(0, 10)}.csv`;
+  link.download = `tajikistan-tariff-history-${formatBeijingTime(new Date().toISOString()).slice(0, 10)}.csv`;
   link.click();
   URL.revokeObjectURL(url);
 }
@@ -303,7 +304,7 @@ export function CustomsPage() {
           pagination={false}
           scroll={{ x: 1200 }}
           columns={[
-            { title: 'Time', dataIndex: 'createdAt', width: 180 },
+            { title: 'Time', dataIndex: 'createdAt', width: 180, render: (value) => formatBeijingTime(value, true) },
             { title: 'Destination', dataIndex: 'destinationCountryName', width: 120 },
             { title: 'Origin', dataIndex: 'originCountryName', width: 120, render: (value) => value || '-' },
             { title: 'HS6', dataIndex: 'hsCode', width: 100 },

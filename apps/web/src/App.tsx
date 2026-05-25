@@ -57,6 +57,7 @@ import {
 } from '@ant-design/icons';
 import { apiRequest } from './api/client';
 import { clearSession, getSessionUser, getToken, saveSession, type SessionUser } from './api/auth';
+import { formatBeijingTime } from './utils/date';
 import * as XLSX from 'xlsx';
 import {
   formatLoadingPlan,
@@ -87,6 +88,8 @@ type SectionKey =
   | 'oversizeProjects'
   | 'oversizeTasks'
   | 'tracking'
+  | 'driverCheckpoints'
+  | 'marketInfo'
   | 'workflowTemplates'
   | 'workflowTodos'
   | 'finance'
@@ -131,12 +134,47 @@ type VehicleType = {
   lineCount?: number | null;
   axleCount?: number | null;
   effectiveLength?: number | null;
+  effectiveWidth?: number | null;
+  effectiveHeight?: number | null;
   effectiveVolume?: number | null;
   payloadWeight?: number | null;
   priceSort?: number | null;
+  priceWeight?: number | null;
   scenario?: string | null;
   createdAt: string;
   updatedAt: string;
+};
+
+type LoadingRule = {
+  id: string;
+  ruleCode: string;
+  ruleName: string;
+  category: string;
+  applicableCountries?: string[];
+  valueType: 'number' | 'text' | 'boolean' | 'json';
+  ruleValue: string;
+  unit?: string | null;
+  enabled: boolean;
+  description?: string | null;
+  sortOrder: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
+type LoadingAiConfig = {
+  id: string;
+  provider: string;
+  apiBaseUrl: string;
+  model: string;
+  enabled: boolean;
+  systemPrompt?: string | null;
+  temperature: number;
+  maxOutputTokens: number;
+  notes?: string | null;
+  hasApiKey: boolean;
+  apiKeyMasked?: string;
+  keySource?: string;
+  updatedAt?: string;
 };
 
 type TransportPlan = {
@@ -163,9 +201,39 @@ type LoadingPlanRecord = {
   cargoItems: CargoItem[];
   vehicleIds: string[];
   planResult: LoadingPlan;
+  planFile?: CargoFile | null;
   status: string;
   createdAt: string;
   updatedAt: string;
+};
+
+type MarketInfo = {
+  id: string;
+  collectedAt: string;
+  whatsappNumber?: string | null;
+  sourceGroup?: string | null;
+  foreignText: string;
+  chineseTranslation?: string | null;
+  status: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+type DriverCheckpoint = {
+  id: string;
+  tgId: string;
+  tgName?: string | null;
+  latitude: number;
+  longitude: number;
+  checkinAt: string;
+  addressRu?: string | null;
+  addressZh?: string | null;
+  plateNo?: string | null;
+  originalImageUrl?: string | null;
+  watermarkedImageUrl?: string | null;
+  mapImageUrl?: string | null;
+  status: string;
+  createdAt: string;
 };
 
 type CargoFile = {
@@ -290,6 +358,8 @@ export default function App() {
   const [quoteForm] = Form.useForm();
   const [employeeForm] = Form.useForm();
   const [vehicleTypeForm] = Form.useForm();
+  const [loadingRuleForm] = Form.useForm();
+  const [loadingAiConfigForm] = Form.useForm();
   const [cargoForm] = Form.useForm();
   const [sessionUser, setSessionUser] = useState<SessionUser | null>(getSessionUser());
   const [activeSection, setActiveSection] = useState<SectionKey>('home');
@@ -299,11 +369,16 @@ export default function App() {
   const [loginLoading, setLoginLoading] = useState(false);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [employees, setEmployees] = useState<Employee[]>([]);
+  const [marketInfos, setMarketInfos] = useState<MarketInfo[]>([]);
+  const [driverCheckpoints, setDriverCheckpoints] = useState<DriverCheckpoint[]>([]);
   const [vehicleTypes, setVehicleTypes] = useState<VehicleType[]>([]);
+  const [loadingRuleConfigs, setLoadingRuleConfigs] = useState<LoadingRule[]>([]);
+  const [loadingAiConfig, setLoadingAiConfig] = useState<LoadingAiConfig | null>(null);
   const [inquiries, setInquiries] = useState<TransportInquiry[]>([]);
   const [plans, setPlans] = useState<TransportPlan[]>([]);
   const [loadingPlans, setLoadingPlans] = useState<LoadingPlanRecord[]>([]);
   const [cargoItems, setCargoItems] = useState<CargoItem[]>([]);
+  const [loadingDestinationCountries, setLoadingDestinationCountries] = useState<string[]>(['哈萨克斯坦']);
   const [loadingPlan, setLoadingPlan] = useState<LoadingPlan | null>(null);
   const [editingCargo, setEditingCargo] = useState<CargoItem | null>(null);
   const [inquiryDrawerOpen, setInquiryDrawerOpen] = useState(false);
@@ -312,15 +387,24 @@ export default function App() {
   const [quoteModalOpen, setQuoteModalOpen] = useState(false);
   const [employeeModalOpen, setEmployeeModalOpen] = useState(false);
   const [vehicleTypeModalOpen, setVehicleTypeModalOpen] = useState(false);
+  const [loadingRuleModalOpen, setLoadingRuleModalOpen] = useState(false);
+  const [loadingAiConfigModalOpen, setLoadingAiConfigModalOpen] = useState(false);
   const [cargoModalOpen, setCargoModalOpen] = useState(false);
   const [savingLoadingPlan, setSavingLoadingPlan] = useState(false);
   const [activeLoadingStep, setActiveLoadingStep] = useState('cargo');
   const [loadingPlanSaved, setLoadingPlanSaved] = useState(false);
+  const [loadingPlanUploadFiles, setLoadingPlanUploadFiles] = useState<UploadFile[]>([]);
   const [selectedLoadingPlanRecord, setSelectedLoadingPlanRecord] = useState<LoadingPlanRecord | null>(null);
+  const [aiOptimizeOpen, setAiOptimizeOpen] = useState(false);
+  const [aiOptimizeLoading, setAiOptimizeLoading] = useState(false);
+  const [aiManualPlanText, setAiManualPlanText] = useState('');
+  const [aiQuestion, setAiQuestion] = useState('');
+  const [aiAnswer, setAiAnswer] = useState('');
   const [selectedInquiry, setSelectedInquiry] = useState<TransportInquiry | null>(null);
   const [editingInquiry, setEditingInquiry] = useState<TransportInquiry | null>(null);
   const [editingEmployee, setEditingEmployee] = useState<Employee | null>(null);
   const [editingVehicleType, setEditingVehicleType] = useState<VehicleType | null>(null);
+  const [editingLoadingRule, setEditingLoadingRule] = useState<LoadingRule | null>(null);
 
   const can = (code: string) => sessionUser?.roleCode === 'ADMIN' || Boolean(sessionUser?.permissions?.includes(code));
 
@@ -342,20 +426,28 @@ export default function App() {
   const loadData = async () => {
     setLoading(true);
     try {
-      const [customerRes, inquiryRes, planRes, employeeRes, vehicleTypeRes, loadingPlanRes] = await Promise.all([
+      const [customerRes, inquiryRes, planRes, employeeRes, vehicleTypeRes, loadingRuleRes, loadingAiConfigRes, loadingPlanRes, marketInfoRes, driverCheckpointRes] = await Promise.all([
         apiRequest<{ items: Customer[] }>('/api/customers'),
         apiRequest<{ items: TransportInquiry[] }>('/api/transport-inquiries'),
         apiRequest<{ items: TransportPlan[] }>('/api/transport-plans'),
         apiRequest<{ items: Employee[] }>('/api/employees'),
         apiRequest<{ items: VehicleType[] }>('/api/vehicle-types'),
+        apiRequest<{ items: LoadingRule[] }>('/api/loading-rules'),
+        apiRequest<LoadingAiConfig>('/api/loading-ai-config'),
         apiRequest<{ items: LoadingPlanRecord[] }>('/api/loading-plans'),
+        apiRequest<{ items: MarketInfo[] }>('/api/market-info'),
+        apiRequest<{ items: DriverCheckpoint[] }>('/api/driver/checkpoints'),
       ]);
       setCustomers(customerRes.items ?? []);
       setInquiries(inquiryRes.items ?? []);
       setPlans(planRes.items ?? []);
       setEmployees(employeeRes.items ?? []);
       setVehicleTypes(vehicleTypeRes.items ?? []);
+      setLoadingRuleConfigs(loadingRuleRes.items ?? []);
+      setLoadingAiConfig(loadingAiConfigRes);
       setLoadingPlans(loadingPlanRes.items ?? []);
+      setMarketInfos(marketInfoRes.items ?? []);
+      setDriverCheckpoints(driverCheckpointRes.items ?? []);
     } catch (error) {
       message.error((error as Error).message);
     } finally {
@@ -401,7 +493,7 @@ export default function App() {
     setPlans([]);
   };
 
-  const uploadCargoFiles = async (files: UploadFile[] = []) => {
+  const uploadCargoFiles = async (files: UploadFile[] = [], folder = 'transport-inquiries') => {
     const uploaded: CargoFile[] = [];
     for (const item of files) {
       if (!item.originFileObj) {
@@ -409,7 +501,7 @@ export default function App() {
       }
       const formData = new FormData();
       formData.append('file', item.originFileObj);
-      formData.append('folder', 'transport-inquiries');
+      formData.append('folder', folder);
       uploaded.push(await apiRequest<CargoFile>('/api/uploads', { method: 'POST', body: formData }));
     }
     return uploaded;
@@ -424,7 +516,7 @@ export default function App() {
             ...record,
             cargoUploadFiles: [],
           }
-        : { cargoType: '??', customsMode: '????', temperatureRequirement: '??' },
+        : { cargoType: '普货', customsMode: '一般贸易', temperatureRequirement: '常温' },
     );
     setInquiryDrawerOpen(true);
   };
@@ -445,7 +537,7 @@ export default function App() {
           ...payload,
         }),
       });
-      message.success(editingInquiry ? '?????' : '?????');
+      message.success(editingInquiry ? '询单已更新' : '询单已创建');
       setInquiryDrawerOpen(false);
       setEditingInquiry(null);
       inquiryForm.resetFields();
@@ -458,7 +550,7 @@ export default function App() {
   const deleteInquiry = async (record: TransportInquiry) => {
     try {
       await apiRequest(`/api/transport-inquiries/${record.id}`, { method: 'DELETE' });
-      message.success('?????');
+      message.success('询单已删除');
       await loadData();
     } catch (error) {
       message.error((error as Error).message);
@@ -475,7 +567,7 @@ export default function App() {
         body: JSON.stringify(values),
       });
       setSelectedInquiry(updated);
-      message.success('???????');
+      message.success('方案已生成');
       setPlanModalOpen(false);
       planForm.resetFields();
       await loadData();
@@ -699,7 +791,23 @@ export default function App() {
       message.warning('系统中还没有可用于自动匹配的车型数据');
       return;
     }
-    setLoadingPlan(generateLoadingPlan(cargoItems, vehicleTypes));
+    setLoadingPlan(
+      generateLoadingPlan(cargoItems, vehicleTypes, {
+        destinationCountries: loadingDestinationCountries,
+        loadingRules: loadingRuleConfigs
+          .filter((rule) => {
+            const countries = rule.applicableCountries ?? [];
+            return !countries.length || countries.some((country) => loadingDestinationCountries.includes(country));
+          })
+          .map((rule) => ({
+            ruleCode: rule.ruleCode,
+            ruleValue: rule.ruleValue,
+            valueType: rule.valueType,
+            enabled: rule.enabled,
+            applicableCountries: rule.applicableCountries,
+          })),
+      }),
+    );
     setLoadingPlanSaved(false);
     setActiveLoadingStep('result');
     message.success('配载方案已生成，可进入第二步调整');
@@ -733,6 +841,28 @@ export default function App() {
       },
     };
   };
+
+  const vehiclePriceWeight = (vehicle: LoadingPlan['vehicles'][number]) => Number(vehicle.vehicle.priceWeight ?? vehicle.vehicle.priceSort ?? 0) || 0;
+
+  const loadingPlanPriceWeightTotal = (plan: LoadingPlan) =>
+    plan.vehicles.reduce((sum, vehicle) => sum + vehiclePriceWeight(vehicle), 0);
+
+  const loadingPlanVehicleTypeSummary = (plan: LoadingPlan) => {
+    const grouped = new Map<string, { count: number; weight: number }>();
+    for (const vehicle of plan.vehicles) {
+      const key = `${vehicle.vehicle.category} / ${vehicle.vehicle.name} · ${vehicle.vehicle.lineCount ?? '-'}线 ${vehicle.vehicle.axleCount ?? '-'}轴`;
+      const existing = grouped.get(key) ?? { count: 0, weight: 0 };
+      existing.count += 1;
+      existing.weight += vehiclePriceWeight(vehicle);
+      grouped.set(key, existing);
+    }
+    return [...grouped.entries()].map(([name, value]) => ({ name, ...value }));
+  };
+
+  const loadingVehicleTitle = (vehicle: LoadingPlan['vehicles'][number]) =>
+    `${vehicle.vehicle.category} / ${vehicle.vehicle.name} · ${vehicle.vehicle.lineCount ?? '-'}线 ${vehicle.vehicle.axleCount ?? '-'}轴 · ${
+      vehicle.loadingMethod ?? '自动配载'
+    }（权重 ${vehiclePriceWeight(vehicle) || '-'}）`;
 
   const updateAssignmentQuantity = (assignment: LoadingAssignment, quantity: number) => {
     const cargo = cargoItems.find((item) => item.id === assignment.cargoId);
@@ -829,14 +959,17 @@ export default function App() {
     const rows = plan.vehicles.flatMap((vehicle, vehicleIndex) =>
       vehicle.assignments.map((assignment) => {
         const cargo = cargoItems.find((item) => item.id === assignment.cargoId);
+        const lengthMm = assignment.lengthCm ?? cargo?.lengthCm ?? '';
+        const widthMm = assignment.widthCm ?? cargo?.widthCm ?? '';
+        const heightMm = assignment.heightCm ?? cargo?.heightCm ?? '';
         return [
           `车辆${vehicleIndex + 1}`,
           `${vehicle.vehicle.category} / ${vehicle.vehicle.name}`,
           assignment.boxNo,
           assignment.cargoName,
-          cargo?.lengthCm ?? '',
-          cargo?.widthCm ?? '',
-          cargo?.heightCm ?? '',
+          lengthMm,
+          widthMm,
+          heightMm,
           assignment.weightKg,
         ];
       }),
@@ -899,6 +1032,19 @@ export default function App() {
     URL.revokeObjectURL(url);
   };
 
+  const downloadUploadedFile = (file?: CargoFile | null) => {
+    if (!file?.fileUrl) {
+      message.warning('当前方案没有上传文件');
+      return;
+    }
+    const link = document.createElement('a');
+    link.href = fileUrl(file.fileUrl);
+    link.download = file.fileName;
+    link.target = '_blank';
+    link.rel = 'noreferrer';
+    link.click();
+  };
+
   const saveLoadingPlan = async () => {
     if (!loadingPlan) {
       message.warning('璇峰厛鐢熸垚閰嶈浇鏂规');
@@ -906,6 +1052,7 @@ export default function App() {
     }
     setSavingLoadingPlan(true);
     try {
+      const uploadedPlanFiles = await uploadCargoFiles(loadingPlanUploadFiles, 'loading-plans');
       await apiRequest('/api/loading-plans', {
         method: 'POST',
         body: JSON.stringify({
@@ -913,17 +1060,48 @@ export default function App() {
           cargoItems,
           vehicleIds: loadingPlan.vehicles.map((item) => item.vehicle.id),
           planResult: loadingPlan,
+          planFile: uploadedPlanFiles[0] ?? null,
         }),
       });
       message.success('???????');
       downloadLoadingPlanFile(loadingPlan);
       await loadData();
+      setLoadingPlanUploadFiles([]);
       setLoadingPlanSaved(true);
       setActiveLoadingStep('saved');
     } catch (error) {
       message.error((error as Error).message);
     } finally {
       setSavingLoadingPlan(false);
+    }
+  };
+
+  const runAiLoadingPlanOptimize = async () => {
+    if (!loadingPlan) {
+      message.warning('请先生成配载方案');
+      return;
+    }
+    setAiOptimizeLoading(true);
+    try {
+      const result = await apiRequest<{ configured?: boolean; answer: string; questions?: string[] }>('/api/loading-plans/ai-optimize', {
+        method: 'POST',
+        body: JSON.stringify({
+          cargoItems,
+          vehicleTypes,
+          systemPlan: loadingPlan,
+          destinationCountry: loadingDestinationCountries.join('、'),
+          manualPlanText: aiManualPlanText,
+          question: aiQuestion,
+        }),
+      });
+      setAiAnswer([result.answer, result.questions?.length ? `\n建议追问：\n${result.questions.map((item) => `- ${item}`).join('\n')}` : ''].join(''));
+      if (result.configured === false) {
+        message.warning('AI Key 尚未配置，已显示离线引导问题');
+      }
+    } catch (error) {
+      message.error((error as Error).message);
+    } finally {
+      setAiOptimizeLoading(false);
     }
   };
 
@@ -994,10 +1172,12 @@ export default function App() {
     setEditingVehicleType(record ?? null);
     vehicleTypeForm.resetFields();
     vehicleTypeForm.setFieldsValue(
-      record ?? {
+      record
+        ? { ...record, priceWeight: record.priceWeight ?? record.priceSort }
+        : {
         sequenceNo: vehicleTypes.length + 1,
         category: '篷布车',
-      },
+          },
     );
     setVehicleTypeModalOpen(true);
   };
@@ -1026,10 +1206,176 @@ export default function App() {
     }
   };
 
+  const openLoadingRuleModal = (record?: LoadingRule) => {
+    setEditingLoadingRule(record ?? null);
+    loadingRuleForm.resetFields();
+    loadingRuleForm.setFieldsValue(
+      record
+        ? record
+        : {
+            category: '通用规则',
+            valueType: 'number',
+            enabled: true,
+            sortOrder: loadingRuleConfigs.length + 1,
+          },
+    );
+    setLoadingRuleModalOpen(true);
+  };
+
+  const saveLoadingRule = async (values: Partial<LoadingRule>) => {
+    try {
+      if (editingLoadingRule) {
+        await apiRequest(`/api/loading-rules/${editingLoadingRule.id}`, {
+          method: 'PUT',
+          body: JSON.stringify(values),
+        });
+        message.success('配载规则已更新');
+      } else {
+        await apiRequest('/api/loading-rules', {
+          method: 'POST',
+          body: JSON.stringify(values),
+        });
+        message.success('配载规则已创建');
+      }
+      setLoadingRuleModalOpen(false);
+      setEditingLoadingRule(null);
+      loadingRuleForm.resetFields();
+      await loadData();
+    } catch (error) {
+      message.error((error as Error).message);
+    }
+  };
+
+  const deleteLoadingRule = async (record: LoadingRule) => {
+    try {
+      await apiRequest(`/api/loading-rules/${record.id}`, { method: 'DELETE' });
+      message.success('配载规则已删除');
+      await loadData();
+    } catch (error) {
+      message.error((error as Error).message);
+    }
+  };
+
+  const openLoadingAiConfigModal = () => {
+    loadingAiConfigForm.resetFields();
+    loadingAiConfigForm.setFieldsValue({
+      provider: loadingAiConfig?.provider ?? 'openai',
+      apiBaseUrl: loadingAiConfig?.apiBaseUrl ?? 'https://api.openai.com/v1/responses',
+      apiKey: '',
+      model: loadingAiConfig?.model ?? 'gpt-4.1-mini',
+      enabled: loadingAiConfig?.enabled ?? true,
+      systemPrompt: loadingAiConfig?.systemPrompt,
+      temperature: loadingAiConfig?.temperature ?? 0.2,
+      maxOutputTokens: loadingAiConfig?.maxOutputTokens ?? 2000,
+      notes: loadingAiConfig?.notes,
+    });
+    setLoadingAiConfigModalOpen(true);
+  };
+
+  const saveLoadingAiConfig = async (values: Partial<LoadingAiConfig> & { apiKey?: string }) => {
+    try {
+      const payload = { ...values };
+      if (!payload.apiKey) {
+        delete payload.apiKey;
+      }
+      const result = await apiRequest<LoadingAiConfig>('/api/loading-ai-config', {
+        method: 'PUT',
+        body: JSON.stringify(payload),
+      });
+      setLoadingAiConfig(result);
+      setLoadingAiConfigModalOpen(false);
+      loadingAiConfigForm.resetFields();
+      message.success('AI 配置已更新');
+    } catch (error) {
+      message.error((error as Error).message);
+    }
+  };
+
+  const invalidateMarketInfo = async (record: MarketInfo) => {
+    try {
+      await apiRequest(`/api/market-info/${record.id}`, { method: 'DELETE' });
+      message.success('已标注无效并删除');
+      setMarketInfos((items) => items.filter((item) => item.id !== record.id));
+    } catch (error) {
+      message.error((error as Error).message);
+    }
+  };
+
   const openDetail = (record: TransportInquiry) => {
     setSelectedInquiry(record);
     setDetailDrawerOpen(true);
   };
+
+  const marketInfoColumns: ColumnsType<MarketInfo> = [
+    { title: '采集时间', dataIndex: 'collectedAt', width: 180, render: (value) => nowrapText(formatBeijingTime(value, true)) },
+    { title: 'WhatsApp号码', dataIndex: 'whatsappNumber', width: 160, render: (value) => nowrapText(value || '-') },
+    { title: '来源群', dataIndex: 'sourceGroup', width: 180, render: (value) => nowrapText(value || '-') },
+    {
+      title: '外语（俄语/哈萨克语）',
+      dataIndex: 'foreignText',
+      width: 360,
+      render: (value) => <Paragraph style={{ marginBottom: 0, whiteSpace: 'pre-wrap' }}>{value}</Paragraph>,
+    },
+    {
+      title: '翻译中文',
+      dataIndex: 'chineseTranslation',
+      width: 360,
+      render: (value) => <Paragraph style={{ marginBottom: 0, whiteSpace: 'pre-wrap' }}>{value || '-'}</Paragraph>,
+    },
+    {
+      title: '操作',
+      width: 110,
+      fixed: 'right',
+      render: (_, row) => (
+        <Popconfirm title="确认标注无效并删除这条市场信息？" onConfirm={() => void invalidateMarketInfo(row)}>
+          <Button danger type="link" icon={<DeleteOutlined />}>
+            无效
+          </Button>
+        </Popconfirm>
+      ),
+    },
+  ];
+
+  const driverCheckpointColumns: ColumnsType<DriverCheckpoint> = [
+    { title: '打卡时间', dataIndex: 'checkinAt', width: 180, render: (value) => nowrapText(formatBeijingTime(value, true)) },
+    { title: '司机', width: 180, render: (_, row) => nowrapText(row.tgName || row.tgId || '-') },
+    { title: 'Telegram ID', dataIndex: 'tgId', width: 150, render: (value) => nowrapText(value || '-') },
+    {
+      title: '地点',
+      width: 360,
+      render: (_, row) => (
+        <Space direction="vertical" size={2}>
+          <Text>{row.addressZh || '-'}</Text>
+          <Text type="secondary">{row.addressRu || '-'}</Text>
+        </Space>
+      ),
+    },
+    {
+      title: '经纬度',
+      width: 190,
+      render: (_, row) => nowrapText(`${Number(row.latitude).toFixed(6)}, ${Number(row.longitude).toFixed(6)}`),
+    },
+    { title: '车牌', dataIndex: 'plateNo', width: 120, render: (value) => nowrapText(value || '-') },
+    {
+      title: '照片',
+      width: 190,
+      fixed: 'right',
+      render: (_, row) => (
+        <Space>
+          {row.watermarkedImageUrl ? (
+            <Button type="link" onClick={() => window.open(row.watermarkedImageUrl || '', '_blank')}>
+              水印图
+            </Button>
+          ) : null}
+          {row.originalImageUrl ? (
+            <Button type="link" onClick={() => window.open(row.originalImageUrl || '', '_blank')}>
+              原图
+            </Button>
+          ) : null}
+        </Space>
+      ),
+    },
+  ];
 
   const inquiryColumns: ColumnsType<TransportInquiry> = [
     { title: '状态', width: 120, fixed: 'left', render: (_, row) => statusTag(row.status) },
@@ -1065,7 +1411,7 @@ export default function App() {
     { title: '重量/体积', width: 150, render: (_, row) => nowrapText(`${row.weightKg ?? '-'} kg / ${row.volumeCbm ?? '-'} m3`) },
     { title: '文件', width: 90, render: (_, row) => <Tag icon={<PaperClipOutlined />}>{row.cargoFiles?.length ?? 0}</Tag> },
     { title: '期望到达', width: 120, render: (_, row) => nowrapText(dateText(row.targetArrivalDate)) },
-    { title: '询单时间', width: 180, render: (_, row) => nowrapText(row.createdAt) },
+    { title: '询单时间', width: 180, render: (_, row) => nowrapText(formatBeijingTime(row.createdAt, true)) },
     {
       title: '操作',
       width: 260,
@@ -1177,13 +1523,15 @@ export default function App() {
   ];
 
   const vehicleTypeColumns: ColumnsType<VehicleType> = [
-    { title: '价格排序', dataIndex: 'priceSort', width: 120, render: (value) => value ?? '-' },
+    { title: '价格权重', dataIndex: 'priceWeight', width: 120, render: (_, row) => row.priceWeight ?? row.priceSort ?? '-' },
     { title: '序号', dataIndex: 'sequenceNo', width: 80 },
     { title: '分类', dataIndex: 'category', width: 140, render: (value) => <Tag color="blue">{value}</Tag> },
     { title: '车型名称', dataIndex: 'name', width: 180, render: nowrapText },
     { title: '线', dataIndex: 'lineCount', width: 80, render: (value) => value ?? '-' },
     { title: '轴', dataIndex: 'axleCount', width: 80, render: (value) => value ?? '-' },
     { title: '有效长度', dataIndex: 'effectiveLength', width: 120, render: (value) => value ?? '-' },
+    { title: '有效宽度', dataIndex: 'effectiveWidth', width: 120, render: (value) => value ?? '-' },
+    { title: '有效高度', dataIndex: 'effectiveHeight', width: 120, render: (value) => value ?? '-' },
     { title: '有效方数', dataIndex: 'effectiveVolume', width: 120, render: (value) => value ?? '-' },
     { title: '载重', dataIndex: 'payloadWeight', width: 120, render: (value) => value ?? '-' },
     { title: '适用场景', dataIndex: 'scenario', width: 260, render: nowrapText },
@@ -1199,7 +1547,70 @@ export default function App() {
     },
   ];
 
+  const loadingRuleColumns: ColumnsType<LoadingRule> = [
+    { title: '排序', dataIndex: 'sortOrder', width: 80 },
+    { title: '规则名称', dataIndex: 'ruleName', width: 180, render: nowrapText },
+    { title: '规则编码', dataIndex: 'ruleCode', width: 220, render: nowrapText },
+    { title: '分类', dataIndex: 'category', width: 120, render: (value) => <Tag>{value}</Tag> },
+    {
+      title: '适用国家',
+      dataIndex: 'applicableCountries',
+      width: 220,
+      render: (value: string[]) =>
+        value?.length ? (
+          <Space size={[4, 4]} wrap>
+            {value.map((country) => (
+              <Tag key={country} color="geekblue">
+                {country}
+              </Tag>
+            ))}
+          </Space>
+        ) : (
+          <Tag>通用</Tag>
+        ),
+    },
+    { title: '类型', dataIndex: 'valueType', width: 90 },
+    {
+      title: '规则值',
+      width: 140,
+      render: (_, row) => `${row.ruleValue}${row.unit ? ` ${row.unit}` : ''}`,
+    },
+    {
+      title: '启用',
+      dataIndex: 'enabled',
+      width: 90,
+      render: (value) => <Tag color={value ? 'green' : 'default'}>{value ? '启用' : '停用'}</Tag>,
+    },
+    { title: '说明', dataIndex: 'description', width: 320, render: nowrapText },
+    {
+      title: '操作',
+      width: 150,
+      fixed: 'right',
+      render: (_, row) => (
+        <Space size={4}>
+          <Button type="link" icon={<EditOutlined />} onClick={() => openLoadingRuleModal(row)}>
+            编辑
+          </Button>
+          <Popconfirm title="确认删除这条配载规则？" onConfirm={() => void deleteLoadingRule(row)}>
+            <Button type="link" danger icon={<DeleteOutlined />}>
+              删除
+            </Button>
+          </Popconfirm>
+        </Space>
+      ),
+    },
+  ];
+
   const vehicleCategoryOptions = ['篷布车', '冷藏车', '普通平板车', '超限车'].map((value) => ({
+    value,
+    label: value,
+  }));
+
+  const loadingRuleCategoryOptions = ['通用规则', '重量规则', '尺寸规则', '车型偏好', '批量规则', '成本规则', '国家规则'].map(
+    (value) => ({ value, label: value }),
+  );
+
+  const countryOptions = ['哈萨克斯坦', '俄罗斯', '乌兹别克斯坦', '吉尔吉斯斯坦', '塔吉克斯坦', '土库曼斯坦'].map((value) => ({
     value,
     label: value,
   }));
@@ -1252,14 +1663,21 @@ export default function App() {
     { title: '车辆数', width: 90, render: (_, row) => row.planResult?.summary?.vehicleCount ?? '-' },
     { title: '已配件数', width: 100, render: (_, row) => row.planResult?.summary?.assignedQuantity ?? '-' },
     { title: '状态', dataIndex: 'status', width: 90, render: (value) => <Tag color="green">{value}</Tag> },
-    { title: '保存时间', dataIndex: 'createdAt', width: 180, render: nowrapText },
+    { title: '保存时间', dataIndex: 'createdAt', width: 180, render: (value) => nowrapText(formatBeijingTime(value, true)) },
     {
       title: '文件',
-      width: 90,
+      width: 150,
       render: (_, row) => (
-        <Button type="link" icon={<DownloadOutlined />} onClick={() => downloadLoadingPlanFile(row.planResult)}>
-          下载
-        </Button>
+        <Space size={0}>
+          {row.planFile?.fileUrl ? (
+            <Button type="link" icon={<PaperClipOutlined />} onClick={() => downloadUploadedFile(row.planFile)}>
+              上传文件
+            </Button>
+          ) : null}
+          <Button type="link" icon={<DownloadOutlined />} onClick={() => downloadLoadingPlanFile(row.planResult)}>
+            配载数据
+          </Button>
+        </Space>
       ),
     },
   ];
@@ -1272,9 +1690,11 @@ export default function App() {
     suppliers: '供应商管理',
     inquiries: '询单管理',
     loading: '配货配载',
+    marketInfo: '市场信息',
     oversizeProjects: '项目管理',
     oversizeTasks: '运输任务',
     tracking: '轨迹跟踪',
+    driverCheckpoints: '司机打卡',
     workflowTemplates: '流程模板',
     workflowTodos: '我的待办',
     baseInfo: '基础信息',
@@ -1285,6 +1705,8 @@ export default function App() {
     home: 'home.view',
     workflowTodos: 'todo.view',
     tracking: 'tracking.view',
+    driverCheckpoints: 'tracking.view',
+    marketInfo: 'market.view',
     inquiries: 'inquiry.view',
     loading: 'loading.view',
     oversizeProjects: 'project.view',
@@ -1301,6 +1723,8 @@ export default function App() {
     { key: 'home', icon: <FundOutlined />, label: '首页' },
     { key: 'workflowTodos', icon: <FileTextOutlined />, label: '我的待办' },
     { key: 'tracking', icon: <PaperClipOutlined />, label: '轨迹跟踪' },
+    { key: 'driverCheckpoints', icon: <CarOutlined />, label: '司机打卡' },
+    { key: 'marketInfo', icon: <FundOutlined />, label: '市场信息' },
     { key: 'inquiries', icon: <FileTextOutlined />, label: '询单管理' },
     { key: 'loading', icon: <CarOutlined />, label: '配货配载' },
     { key: 'oversizeProjects', icon: <RocketOutlined />, label: '项目管理' },
@@ -1430,10 +1854,17 @@ export default function App() {
               <Button type="primary" icon={<PlusOutlined />} onClick={() => openVehicleTypeModal()}>
                 新增车型
               </Button>
-            ) : activeSection === 'loading' && can('loading.manage') ? (
-              <Button type="primary" icon={<PlusOutlined />} onClick={() => openCargoModal()}>
-                新增货物
-              </Button>
+            ) : activeSection === 'loading' ? (
+              <>
+                <Button icon={<FileTextOutlined />} onClick={() => setActiveLoadingStep('saved')}>
+                  查看配载方案
+                </Button>
+                {can('loading.manage') ? (
+                  <Button type="primary" icon={<PlusOutlined />} onClick={() => openCargoModal()}>
+                    新增货物
+                  </Button>
+                ) : null}
+              </>
             ) : (
               <Button
                 type="primary"
@@ -1445,6 +1876,8 @@ export default function App() {
                     activeSection === 'customers' ||
                     activeSection === 'finance' ||
                     activeSection === 'suppliers' ||
+                    activeSection === 'marketInfo' ||
+                    activeSection === 'driverCheckpoints' ||
                     activeSection === 'oversizeProjects' ||
                     activeSection === 'oversizeTasks' ||
                     activeSection === 'tracking' ||
@@ -1459,9 +1892,6 @@ export default function App() {
                 新建询单
               </Button>
             )}
-            <Button onClick={logout}>
-              退出登录
-            </Button>
           </Space>
         </Header>
 
@@ -1472,6 +1902,8 @@ export default function App() {
             activeSection !== 'oversizeProjects' &&
             activeSection !== 'oversizeTasks' &&
             activeSection !== 'tracking' &&
+            activeSection !== 'marketInfo' &&
+            activeSection !== 'driverCheckpoints' &&
             activeSection !== 'workflowTemplates' &&
             activeSection !== 'workflowTodos' &&
             activeSection !== 'permissions' &&
@@ -1575,11 +2007,28 @@ export default function App() {
                     </Space>
                   }
                 >
+                  <Row gutter={12} style={{ marginBottom: 12 }}>
+                    <Col xs={24} md={8}>
+                      <Text type="secondary">途经/目的国家</Text>
+                      <Select
+                        mode="multiple"
+                        value={loadingDestinationCountries}
+                        onChange={(value) => {
+                          setLoadingDestinationCountries(value);
+                          setLoadingPlan(null);
+                          setLoadingPlanSaved(false);
+                        }}
+                        placeholder="请选择途经或目的国家"
+                        style={{ width: '100%', marginTop: 6 }}
+                        options={countryOptions}
+                      />
+                    </Col>
+                  </Row>
                   <Table
                     rowKey="id"
                     dataSource={cargoItems}
                     columns={cargoColumns}
-                    scroll={{ x: 1280 }}
+                    scroll={{ x: 1520 }}
                     pagination={{ pageSize: 8 }}
                     locale={{ emptyText: <Empty description="请新增或导入货物信息" /> }}
                   />
@@ -1593,9 +2042,31 @@ export default function App() {
                   bordered={false}
                   extra={
                     <Space>
+                      <Button
+                        disabled={!loadingPlan}
+                        icon={<RocketOutlined />}
+                        onClick={() => {
+                          setAiOptimizeOpen(true);
+                          setAiAnswer('');
+                          setAiQuestion('');
+                        }}
+                      >
+                        AI优化
+                      </Button>
                       <Button disabled={!loadingPlan} icon={<DownloadOutlined />} onClick={() => loadingPlan && downloadLoadingPlanFile(loadingPlan)}>
                         下载
                       </Button>
+                      <Upload
+                        accept=".xlsx,.xls,.csv,.pdf,.jpg,.jpeg,.png"
+                        beforeUpload={() => false}
+                        maxCount={1}
+                        fileList={loadingPlanUploadFiles}
+                        onChange={({ fileList }) => setLoadingPlanUploadFiles(fileList.slice(-1))}
+                      >
+                        <Button disabled={!loadingPlan} icon={<UploadOutlined />}>
+                          上传方案文件
+                        </Button>
+                      </Upload>
                       <Button type="primary" disabled={!loadingPlan} loading={savingLoadingPlan} icon={<SaveOutlined />} onClick={saveLoadingPlan}>
                         保存方案</Button>
                     </Space>
@@ -1604,24 +2075,35 @@ export default function App() {
                   {loadingPlan ? (
                     <Space direction="vertical" size={16} style={{ width: '100%' }}>
                       <Row gutter={[12, 12]}>
-                        <Col xs={24} md={6}>
+                        <Col xs={24} md={5}>
                           <Statistic title="已配/总件数" value={`${loadingPlan.summary.assignedQuantity}/${loadingPlan.summary.totalCargoQuantity}`} />
                         </Col>
-                        <Col xs={24} md={6}>
+                        <Col xs={24} md={4}>
                           <Statistic title="车辆数" value={loadingPlan.summary.vehicleCount} />
                         </Col>
-                        <Col xs={24} md={6}>
+                        <Col xs={24} md={5}>
                           <Statistic title="已配重量 kg" value={loadingPlan.summary.assignedWeightKg.toFixed(2)} />
                         </Col>
-                        <Col xs={24} md={6}>
+                        <Col xs={24} md={5}>
                           <Statistic title="已配方数 m3" value={loadingPlan.summary.assignedVolumeCbm.toFixed(3)} />
                         </Col>
+                        <Col xs={24} md={5}>
+                          <Statistic title="总价格权重" value={loadingPlanPriceWeightTotal(loadingPlan)} />
+                        </Col>
                       </Row>
+                      <Space size={[8, 8]} wrap>
+                        <Text type="secondary">车型车辆数：</Text>
+                        {loadingPlanVehicleTypeSummary(loadingPlan).map((item) => (
+                          <Tag key={item.name} color="blue">
+                            {item.name} × {item.count}（权重 {item.weight}）
+                          </Tag>
+                        ))}
+                      </Space>
                       {loadingPlan.vehicles.map((vehicle, vehicleIndex) => (
                         <Card
                           key={vehicle.vehicle.id}
                           size="small"
-                          title={`${vehicle.vehicle.category} / ${vehicle.vehicle.name} · ${vehicle.vehicle.lineCount ?? '-'}线 ${vehicle.vehicle.axleCount ?? '-'}轴 · ${vehicle.loadingMethod ?? '自动配载'}`}
+                          title={loadingVehicleTitle(vehicle)}
                           extra={
                             <Space>
                               <Text type="secondary">调整车型</Text>
@@ -1720,6 +2202,40 @@ export default function App() {
               <OversizeTaskManagementPage openRequest={taskOpenRequest} />
             ) : activeSection === 'tracking' ? (
               <TrackingPage />
+            ) : activeSection === 'driverCheckpoints' ? (
+              <Card
+                className="glass-card"
+                title="司机打卡照片"
+                bordered={false}
+                extra={<Text type="secondary">Telegram Mini App 上传的定位防伪照片</Text>}
+              >
+                <Table
+                  rowKey="id"
+                  loading={loading}
+                  dataSource={driverCheckpoints}
+                  columns={driverCheckpointColumns}
+                  scroll={{ x: 1400 }}
+                  pagination={{ pageSize: 10 }}
+                  locale={{ emptyText: <Empty description="暂无司机打卡照片" /> }}
+                />
+              </Card>
+            ) : activeSection === 'marketInfo' ? (
+              <Card
+                className="glass-card"
+                title="市场信息"
+                bordered={false}
+                extra={<Text type="secondary">Chrome 插件定时采集 WhatsApp 群报价后同步到这里</Text>}
+              >
+                <Table
+                  rowKey="id"
+                  loading={loading}
+                  dataSource={marketInfos}
+                  columns={marketInfoColumns}
+                  scroll={{ x: 1360 }}
+                  pagination={{ pageSize: 10 }}
+                  locale={{ emptyText: <Empty description="暂无市场信息" /> }}
+                />
+              </Card>
             ) : activeSection === 'workflowTemplates' ? (
               <WorkflowTemplatePage />
             ) : activeSection === 'workflowTodos' ? (
@@ -1761,6 +2277,59 @@ export default function App() {
                     pagination={{ pageSize: 10 }}
                   />
                 </Card>
+                <Card
+                  className="glass-card"
+                  title="配载规则"
+                  bordered={false}
+                  extra={
+                    can('base.manage') ? (
+                      <Button type="primary" icon={<PlusOutlined />} onClick={() => openLoadingRuleModal()}>
+                        新增规则
+                      </Button>
+                    ) : null
+                  }
+                >
+                  <Table
+                    rowKey="id"
+                    loading={loading}
+                    dataSource={loadingRuleConfigs}
+                    columns={loadingRuleColumns}
+                    scroll={{ x: 1220 }}
+                    pagination={{ pageSize: 10 }}
+                  />
+                </Card>
+                <Card
+                  className="glass-card"
+                  title="配载 AI 优化配置"
+                  bordered={false}
+                  extra={
+                    can('base.manage') ? (
+                      <Button type="primary" icon={<EditOutlined />} onClick={openLoadingAiConfigModal}>
+                        编辑配置
+                      </Button>
+                    ) : null
+                  }
+                >
+                  <Descriptions column={{ xs: 1, md: 2, xl: 3 }} size="small" bordered>
+                    <Descriptions.Item label="启用状态">
+                      <Tag color={loadingAiConfig?.enabled ? 'green' : 'default'}>{loadingAiConfig?.enabled ? '启用' : '停用'}</Tag>
+                    </Descriptions.Item>
+                    <Descriptions.Item label="服务商">{loadingAiConfig?.provider ?? 'openai'}</Descriptions.Item>
+                    <Descriptions.Item label="模型">{loadingAiConfig?.model ?? '-'}</Descriptions.Item>
+                    <Descriptions.Item label="API 地址">{loadingAiConfig?.apiBaseUrl ?? '-'}</Descriptions.Item>
+                    <Descriptions.Item label="API Key">
+                      {loadingAiConfig?.hasApiKey ? (
+                        <Tag color="blue">{loadingAiConfig.apiKeyMasked || '已配置'}</Tag>
+                      ) : (
+                        <Tag color="red">未配置</Tag>
+                      )}
+                      {loadingAiConfig?.keySource ? <Text type="secondary"> {loadingAiConfig.keySource}</Text> : null}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="输出限制">{loadingAiConfig?.maxOutputTokens ?? 2000}</Descriptions.Item>
+                    <Descriptions.Item label="温度">{loadingAiConfig?.temperature ?? 0.2}</Descriptions.Item>
+                    <Descriptions.Item label="备注" span={3}>{loadingAiConfig?.notes || '-'}</Descriptions.Item>
+                  </Descriptions>
+                </Card>
               </Space>
             )}
           </Space>
@@ -1768,14 +2337,21 @@ export default function App() {
       </Layout>
 
       <Modal
-        title={selectedLoadingPlanRecord ? `閰嶈浇鏂规璇︽儏 ${selectedLoadingPlanRecord.planNo}` : '閰嶈浇鏂规璇︽儏'}
+        title={selectedLoadingPlanRecord ? `配载方案详情 ${selectedLoadingPlanRecord.planNo}` : '配载方案详情'}
         open={Boolean(selectedLoadingPlanRecord)}
         onCancel={() => setSelectedLoadingPlanRecord(null)}
         footer={
           selectedLoadingPlanRecord ? (
-            <Button icon={<DownloadOutlined />} onClick={() => downloadLoadingPlanFile(selectedLoadingPlanRecord.planResult)}>
-              涓嬭浇鏂规鏂囦欢
-            </Button>
+            <Space>
+              {selectedLoadingPlanRecord.planFile?.fileUrl ? (
+                <Button icon={<PaperClipOutlined />} onClick={() => downloadUploadedFile(selectedLoadingPlanRecord.planFile)}>
+                  下载上传文件
+                </Button>
+              ) : null}
+              <Button icon={<DownloadOutlined />} onClick={() => downloadLoadingPlanFile(selectedLoadingPlanRecord.planResult)}>
+                下载配载数据
+              </Button>
+            </Space>
           ) : null
         }
         width={1080}
@@ -1788,29 +2364,39 @@ export default function App() {
               <Descriptions.Item label="状态">{selectedLoadingPlanRecord.status}</Descriptions.Item>
               <Descriptions.Item label="车辆数">{selectedLoadingPlanRecord.planResult?.summary?.vehicleCount ?? '-'}</Descriptions.Item>
               <Descriptions.Item label="已配件数">{selectedLoadingPlanRecord.planResult?.summary?.assignedQuantity ?? '-'}</Descriptions.Item>
-              <Descriptions.Item label="保存时间">{selectedLoadingPlanRecord.createdAt}</Descriptions.Item>
+              <Descriptions.Item label="保存时间">{formatBeijingTime(selectedLoadingPlanRecord.createdAt, true)}</Descriptions.Item>
               <Descriptions.Item label="已配重量 kg">{selectedLoadingPlanRecord.planResult?.summary?.assignedWeightKg?.toFixed?.(2) ?? '-'}</Descriptions.Item>
               <Descriptions.Item label="已配方数 m3">{selectedLoadingPlanRecord.planResult?.summary?.assignedVolumeCbm?.toFixed?.(3) ?? '-'}</Descriptions.Item>
               <Descriptions.Item label="货物总数">{selectedLoadingPlanRecord.planResult?.summary?.totalCargoQuantity ?? '-'}</Descriptions.Item>
+              <Descriptions.Item label="总价格权重">{selectedLoadingPlanRecord.planResult ? loadingPlanPriceWeightTotal(selectedLoadingPlanRecord.planResult) : '-'}</Descriptions.Item>
+              <Descriptions.Item label="上传文件" span={2}>
+                {selectedLoadingPlanRecord.planFile?.fileName ? (
+                  <Button type="link" icon={<PaperClipOutlined />} onClick={() => downloadUploadedFile(selectedLoadingPlanRecord.planFile)}>
+                    {selectedLoadingPlanRecord.planFile.fileName}
+                  </Button>
+                ) : (
+                  '未上传，可下载系统生成的配载数据'
+                )}
+              </Descriptions.Item>
             </Descriptions>
             {selectedLoadingPlanRecord.planResult?.vehicles?.map((vehicle, index) => (
               <Card
                 key={`${vehicle.vehicle.id}-${index}`}
                 size="small"
-                title={`第 ${index + 1} 车：${vehicle.vehicle.category} / ${vehicle.vehicle.name} - ${vehicle.vehicle.lineCount ?? '-'} 线 ${vehicle.vehicle.axleCount ?? '-'} 轴`}
+                title={`第 ${index + 1} 车：${loadingVehicleTitle(vehicle)}`}
               >
                 <Row gutter={[12, 12]} style={{ marginBottom: 12 }}>
                   <Col xs={24} md={6}>
-                    <Statistic title="瑁呰浇鏂瑰紡" value={vehicle.loadingMethod || '鑷姩閰嶈浇'} />
+                    <Statistic title="装载方式" value={vehicle.loadingMethod || '自动配载'} />
                   </Col>
                   <Col xs={24} md={6}>
-                    <Statistic title="閲嶉噺 kg" value={vehicle.usedWeightKg.toFixed(2)} />
+                    <Statistic title="重量 kg" value={vehicle.usedWeightKg.toFixed(2)} />
                   </Col>
                   <Col xs={24} md={6}>
-                    <Statistic title="鏂规暟 m3" value={vehicle.usedVolumeCbm.toFixed(3)} />
+                    <Statistic title="方数 m3" value={vehicle.usedVolumeCbm.toFixed(3)} />
                   </Col>
                   <Col xs={24} md={6}>
-                    <Statistic title="鏈€澶ч暱搴?mm" value={vehicle.maxLengthCm} />
+                    <Statistic title="最大长度 mm" value={vehicle.maxLengthCm} />
                   </Col>
                 </Row>
                 <Table
@@ -1819,19 +2405,68 @@ export default function App() {
                   pagination={false}
                   dataSource={vehicle.assignments}
                   columns={[
-                    { title: '绠卞瓙搴忓彿', dataIndex: 'boxNo', width: 140 },
-                    { title: '璐х墿', dataIndex: 'cargoName', width: 180 },
-                    { title: '鏁伴噺', dataIndex: 'quantity', width: 90 },
-                    { title: '閲嶉噺 kg', dataIndex: 'weightKg', width: 120, render: (value) => Number(value).toFixed(2) },
-                    { title: '鏂规暟 m3', dataIndex: 'volumeCbm', width: 120, render: (value) => Number(value).toFixed(3) },
-                    { title: '鎻愰啋', render: (_, assignment) => (assignment.notes?.length ? assignment.notes.map((item) => <Tag key={item}>{item}</Tag>) : '-') },
+                    { title: '箱子序号', dataIndex: 'boxNo', width: 140 },
+                    { title: '货物', dataIndex: 'cargoName', width: 180 },
+                    { title: '数量', dataIndex: 'quantity', width: 90 },
+                    { title: '重量 kg', dataIndex: 'weightKg', width: 120, render: (value) => Number(value).toFixed(2) },
+                    { title: '方数 m3', dataIndex: 'volumeCbm', width: 120, render: (value) => Number(value).toFixed(3) },
+                    { title: '提醒', render: (_, assignment) => (assignment.notes?.length ? assignment.notes.map((item) => <Tag key={item}>{item}</Tag>) : '-') },
                   ]}
                 />
-                {vehicle.warnings?.length ? <Alert type="warning" showIcon style={{ marginTop: 12 }} message={vehicle.warnings.join('?')} /> : null}
+                {vehicle.warnings?.length ? <Alert type="warning" showIcon style={{ marginTop: 12 }} message={vehicle.warnings.join('；')} /> : null}
               </Card>
             ))}
           </Space>
         ) : null}
+      </Modal>
+
+      <Modal
+        title="AI配载优化"
+        open={aiOptimizeOpen}
+        onCancel={() => setAiOptimizeOpen(false)}
+        width={860}
+        footer={[
+          <Button key="close" onClick={() => setAiOptimizeOpen(false)}>
+            关闭
+          </Button>,
+          <Button key="run" type="primary" icon={<RocketOutlined />} loading={aiOptimizeLoading} onClick={runAiLoadingPlanOptimize}>
+            开始分析
+          </Button>,
+        ]}
+      >
+        <Space direction="vertical" size={14} style={{ width: '100%' }}>
+          <Alert
+            type="info"
+            showIcon
+            message="用于同事手工调整与系统方案不一致时，AI通过问答分析原因，并沉淀后续算法规则。"
+            description="请把同事调整后的车次、车型、货物序号、原因或疑问写在下面。AI会结合当前系统方案、货物和车型数据进行分析。"
+          />
+          <Form layout="vertical">
+            <Form.Item label="同事手工方案 / 调整原因">
+              <TextArea
+                rows={6}
+                value={aiManualPlanText}
+                onChange={(event) => setAiManualPlanText(event.target.value)}
+                placeholder="例如：第1车 2,21,5,6,22,23,7 配17米6轴平板；原因：减少总车数，平板可办超宽证，总重不超31吨..."
+              />
+            </Form.Item>
+            <Form.Item label="继续追问 / 补充说明">
+              <TextArea
+                rows={3}
+                value={aiQuestion}
+                onChange={(event) => setAiQuestion(event.target.value)}
+                placeholder="例如：为什么这几件可以放一车？篷布和17米6轴平板应该如何按总成本比较？"
+              />
+            </Form.Item>
+          </Form>
+          {aiAnswer ? (
+            <Card size="small" title="AI分析结果">
+              <Paragraph style={{ whiteSpace: 'pre-wrap', marginBottom: 0 }}>{aiAnswer}</Paragraph>
+            </Card>
+          ) : (
+            <Empty description="填写手工方案后点击开始分析" />
+          )}
+        </Space>
       </Modal>
 
       <Drawer
@@ -1847,10 +2482,10 @@ export default function App() {
         <Form
           form={inquiryForm}
           layout="vertical"
-          initialValues={{ cargoType: '??', customsMode: '????', temperatureRequirement: '??' }}
+          initialValues={{ cargoType: '普货', customsMode: '一般贸易', temperatureRequirement: '常温' }}
           onFinish={(values) => void saveInquiry(values)}
         >
-          <Form.Item name="customerId" label="瀹㈡埛">
+          <Form.Item name="customerId" label="客户">
             <Select
               allowClear
               showSearch
@@ -1858,7 +2493,7 @@ export default function App() {
               options={customers.map((item) => ({ value: item.id, label: item.shortName || item.name }))}
             />
           </Form.Item>
-          <Form.Item name="customerName" label="????" rules={[{ required: true, message: '????????' }]}>
+          <Form.Item name="customerName" label="客户名称" rules={[{ required: true, message: '请输入客户名称' }]}>
             <Input placeholder="可直接填写临时客户" />
           </Form.Item>
           <Form.Item name="salesperson" label="业务员">
@@ -1872,8 +2507,8 @@ export default function App() {
           </Form.Item>
           <Form.Item
             name="serviceItems"
-            label="鏈嶅姟椤圭洰"
-            rules={[{ required: true, message: '???????????' }]}
+            label="服务项目"
+            rules={[{ required: true, message: '请至少选择一个服务项目' }]}
           >
             <Select
               mode="multiple"
@@ -1889,59 +2524,59 @@ export default function App() {
               </Form.Item>
             </Col>
             <Col span={12}>
-              <Form.Item name="contactPhone" label="鑱旂郴鐢佃瘽">
+              <Form.Item name="contactPhone" label="联系电话">
                 <Input />
               </Form.Item>
             </Col>
           </Row>
-          <Form.Item name="cargoName" label="????" rules={[{ required: true, message: '???????' }]}>
+          <Form.Item name="cargoName" label="货物名称" rules={[{ required: true, message: '请输入货物名称' }]}>
             <Input placeholder="如：机械设备、鲜花、跨境电商包裹" />
           </Form.Item>
           <Row gutter={12}>
             <Col span={12}>
               <Form.Item name="origin" label="起运地" rules={[{ required: true, message: '请输入起运地' }]}>
-                <Input placeholder="涓浗 涓婃捣" />
+                <Input placeholder="中国 上海" />
               </Form.Item>
             </Col>
             <Col span={12}>
               <Form.Item name="destination" label="目的地" rules={[{ required: true, message: '请输入目的地' }]}>
-                <Input placeholder="鍝堣惃鍏嬫柉鍧?闃挎媺鏈ㄥ浘" />
+                <Input placeholder="哈萨克斯坦 阿拉木图" />
               </Form.Item>
             </Col>
           </Row>
           <Row gutter={12}>
             <Col span={8}>
-              <Form.Item name="weightKg" label="閲嶉噺 kg">
+              <Form.Item name="weightKg" label="重量 kg">
                 <InputNumber min={0} style={{ width: '100%' }} />
               </Form.Item>
             </Col>
             <Col span={8}>
-              <Form.Item name="volumeCbm" label="浣撶Н m3">
+              <Form.Item name="volumeCbm" label="体积 m3">
                 <InputNumber min={0} style={{ width: '100%' }} />
               </Form.Item>
             </Col>
             <Col span={8}>
-              <Form.Item name="packageCount" label="浠舵暟">
+              <Form.Item name="packageCount" label="件数">
                 <InputNumber min={0} style={{ width: '100%' }} />
               </Form.Item>
             </Col>
           </Row>
           <Row gutter={12}>
             <Col span={12}>
-              <Form.Item name="readyDate" label="澶囪揣鏃ユ湡">
+              <Form.Item name="readyDate" label="备货日期">
                 <Input type="date" />
               </Form.Item>
             </Col>
             <Col span={12}>
-              <Form.Item name="targetArrivalDate" label="鏈熸湜鍒拌揪">
+              <Form.Item name="targetArrivalDate" label="期望到达">
                 <Input type="date" />
               </Form.Item>
             </Col>
           </Row>
           <Row gutter={12}>
             <Col span={8}>
-              <Form.Item name="cargoType" label="璐х墿绫诲瀷">
-                <Select options={['??', '??', '??', '???', '????'].map((value) => ({ value, label: value }))} />
+              <Form.Item name="cargoType" label="货物类型">
+                <Select options={['普货', '重货', '泡货', '危险品', '冷链货物'].map((value) => ({ value, label: value }))} />
               </Form.Item>
             </Col>
             <Col span={8}>
@@ -1950,29 +2585,29 @@ export default function App() {
               </Form.Item>
             </Col>
             <Col span={8}>
-              <Form.Item name="temperatureRequirement" label="娓╂帶瑕佹眰">
-                <Select options={['甯告俯', '鍐疯棌', '鍐峰喕', '鎭掓俯'].map((value) => ({ value, label: value }))} />
+              <Form.Item name="temperatureRequirement" label="温控要求">
+                <Select options={['常温', '冷藏', '冷冻', '恒温'].map((value) => ({ value, label: value }))} />
               </Form.Item>
             </Col>
           </Row>
-          <Form.Item name="specialRequirement" label="鐗规畩瑕佹眰">
+          <Form.Item name="specialRequirement" label="特殊要求">
             <TextArea rows={4} placeholder="时效、口岸偏好、装卸限制、保险、目的国清关要求等" />
           </Form.Item>
           <Form.Item
             name="cargoUploadFiles"
-            label={editingInquiry ? '杩藉姞瀹㈡埛璐х墿鏂囦欢' : '瀹㈡埛璐х墿鏂囦欢'}
+            label={editingInquiry ? '追加客户货物文件' : '客户货物文件'}
             valuePropName="fileList"
             getValueFromEvent={(event) => event?.fileList ?? []}
             extra="支持上传客户原始询价单、货物清单、装箱资料、图片、PDF、Excel、Word 等文件。"
           >
             <Upload beforeUpload={() => false} multiple>
-              <Button icon={<UploadOutlined />}>閫夋嫨鏂囦欢</Button>
+              <Button icon={<UploadOutlined />}>选择文件</Button>
             </Upload>
           </Form.Item>
           {editingInquiry?.cargoFiles?.length ? (
             <List
               size="small"
-              header="宸叉湁瀹㈡埛璐х墿鏂囦欢"
+              header="已有客户货物文件"
               dataSource={editingInquiry.cargoFiles}
               renderItem={(item) => (
                 <List.Item>
@@ -1982,7 +2617,7 @@ export default function App() {
             />
           ) : null}
           <Button type="primary" htmlType="submit" block>
-            {editingInquiry ? '淇濆瓨淇敼' : '淇濆瓨璇㈠崟'}
+            {editingInquiry ? '保存修改' : '保存询单'}
           </Button>
         </Form>
       </Drawer>
@@ -1997,30 +2632,30 @@ export default function App() {
         {selectedInquiry ? (
           <Space direction="vertical" size={18} style={{ width: '100%' }}>
             <Descriptions column={2} bordered size="small">
-              <Descriptions.Item label="??">{selectedInquiry.customerName}</Descriptions.Item>
-              <Descriptions.Item label="??">{statusTag(selectedInquiry.status)}</Descriptions.Item>
-              <Descriptions.Item label="???">{selectedInquiry.salesperson || '-'}</Descriptions.Item>
-              <Descriptions.Item label="???">{selectedInquiry.contactName || '-'}</Descriptions.Item>
-              <Descriptions.Item label="鏈嶅姟椤圭洰" span={2}>
+              <Descriptions.Item label="客户">{selectedInquiry.customerName}</Descriptions.Item>
+              <Descriptions.Item label="状态">{statusTag(selectedInquiry.status)}</Descriptions.Item>
+              <Descriptions.Item label="业务员">{selectedInquiry.salesperson || '-'}</Descriptions.Item>
+              <Descriptions.Item label="联系人">{selectedInquiry.contactName || '-'}</Descriptions.Item>
+              <Descriptions.Item label="服务项目" span={2}>
                 <Space size={4} wrap>
                   {(selectedInquiry.serviceItems ?? []).map((item) => (
                     <Tag key={item} color="blue">{item}</Tag>
                   ))}
                 </Space>
               </Descriptions.Item>
-              <Descriptions.Item label="璐х墿">{selectedInquiry.cargoName}</Descriptions.Item>
-              <Descriptions.Item label="绫诲瀷">{selectedInquiry.cargoType || '-'}</Descriptions.Item>
-              <Descriptions.Item label="???">{selectedInquiry.origin}</Descriptions.Item>
-              <Descriptions.Item label="???">{selectedInquiry.destination}</Descriptions.Item>
-              <Descriptions.Item label="閲嶉噺">{selectedInquiry.weightKg ?? '-'} kg</Descriptions.Item>
-              <Descriptions.Item label="浣撶Н">{selectedInquiry.volumeCbm ?? '-'} m3</Descriptions.Item>
-              <Descriptions.Item label="鎶ュ叧鏂瑰紡">{selectedInquiry.customsMode || '-'}</Descriptions.Item>
-              <Descriptions.Item label="娓╂帶瑕佹眰">{selectedInquiry.temperatureRequirement || '-'}</Descriptions.Item>
-              <Descriptions.Item label="鐗规畩瑕佹眰" span={2}>
+              <Descriptions.Item label="货物">{selectedInquiry.cargoName}</Descriptions.Item>
+              <Descriptions.Item label="类型">{selectedInquiry.cargoType || '-'}</Descriptions.Item>
+              <Descriptions.Item label="起运地">{selectedInquiry.origin}</Descriptions.Item>
+              <Descriptions.Item label="目的地">{selectedInquiry.destination}</Descriptions.Item>
+              <Descriptions.Item label="重量">{selectedInquiry.weightKg ?? '-'} kg</Descriptions.Item>
+              <Descriptions.Item label="体积">{selectedInquiry.volumeCbm ?? '-'} m3</Descriptions.Item>
+              <Descriptions.Item label="报关方式">{selectedInquiry.customsMode || '-'}</Descriptions.Item>
+              <Descriptions.Item label="温控要求">{selectedInquiry.temperatureRequirement || '-'}</Descriptions.Item>
+              <Descriptions.Item label="特殊要求" span={2}>
                 {selectedInquiry.specialRequirement || '-'}
               </Descriptions.Item>
             </Descriptions>
-            <Card className="glass-card" title="瀹㈡埛璐х墿鏂囦欢" bordered={false}>
+            <Card className="glass-card" title="客户货物文件" bordered={false}>
               {selectedInquiry.cargoFiles?.length ? (
                 <List
                   dataSource={selectedInquiry.cargoFiles}
@@ -2035,7 +2670,7 @@ export default function App() {
                           target="_blank"
                           rel="noreferrer"
                         >
-                          鎵撳紑
+                          打开
                         </Button>,
                       ]}
                     >
@@ -2048,25 +2683,25 @@ export default function App() {
                   )}
                 />
               ) : (
-                <Empty description="????????" />
+                <Empty description="暂无客户货物文件" />
               )}
             </Card>
             {canUploadQuote(selectedInquiry) ? (
               <Button type="primary" icon={<UploadOutlined />} onClick={() => openQuoteModal(selectedInquiry)}>
-                ????
+                报价上传
               </Button>
             ) : null}
             {selectedInquiry.status === 'QUOTED' ? (
               <Descriptions column={2} bordered size="small">
-                <Descriptions.Item label="????">{statusTag(selectedInquiry.status)}</Descriptions.Item>
-                <Descriptions.Item label="????">{selectedInquiry.quotedAt || '-'}</Descriptions.Item>
-                <Descriptions.Item label="鎶ヤ环閲戦">
+                <Descriptions.Item label="报价状态">{statusTag(selectedInquiry.status)}</Descriptions.Item>
+                <Descriptions.Item label="报价时间">{formatBeijingTime(selectedInquiry.quotedAt, true)}</Descriptions.Item>
+                <Descriptions.Item label="报价金额">
                   {selectedInquiry.quoteAmount ?? '-'} {selectedInquiry.quoteCurrency || ''}
                 </Descriptions.Item>
-                <Descriptions.Item label="鎶ヤ环璇存槑">{selectedInquiry.quoteRemark || '-'}</Descriptions.Item>
+                <Descriptions.Item label="报价说明">{selectedInquiry.quoteRemark || '-'}</Descriptions.Item>
               </Descriptions>
             ) : null}
-            <Card className="glass-card" title="鎶ヤ环鏂囦欢" bordered={false}>
+            <Card className="glass-card" title="报价文件" bordered={false}>
               {selectedInquiry.quoteFiles?.length ? (
                 <List
                   dataSource={selectedInquiry.quoteFiles}
@@ -2074,7 +2709,7 @@ export default function App() {
                     <List.Item
                       actions={[
                         <Button key="open" type="link" href={fileUrl(item.fileUrl)} target="_blank" rel="noreferrer">
-                          鎵撳紑
+                          打开
                         </Button>,
                       ]}
                     >
@@ -2083,10 +2718,10 @@ export default function App() {
                   )}
                 />
               ) : (
-                <Empty description="鏆傛棤鎶ヤ环鏂囦欢" />
+                <Empty description="暂无报价文件" />
               )}
             </Card>
-            <Card className="glass-card" title="杩愯浇鏂规鏂囦欢" bordered={false}>
+            <Card className="glass-card" title="运载方案文件" bordered={false}>
               {selectedInquiry.solutionFiles?.length ? (
                 <List
                   dataSource={selectedInquiry.solutionFiles}
@@ -2094,7 +2729,7 @@ export default function App() {
                     <List.Item
                       actions={[
                         <Button key="open" type="link" href={fileUrl(item.fileUrl)} target="_blank" rel="noreferrer">
-                          鎵撳紑
+                          打开
                         </Button>,
                       ]}
                     >
@@ -2103,7 +2738,7 @@ export default function App() {
                   )}
                 />
               ) : (
-                <Empty description="鏆傛棤杩愯浇鏂规鏂囦欢" />
+                <Empty description="暂无运载方案文件" />
               )}
             </Card>
             <Card className="glass-card" title="已生成方案" bordered={false}>
@@ -2113,12 +2748,12 @@ export default function App() {
                   renderItem={(item) => (
                     <List.Item>
                       <List.Item.Meta
-                        title={`${item.planNo} ? ${item.title}`}
+                        title={`${item.planNo} · ${item.title}`}
                         description={
                           <Paragraph style={{ whiteSpace: 'pre-wrap', marginBottom: 0 }}>
                             {item.route}
                             {'\n'}
-                            {item.transitDays} 澶?路 {item.estimatedCost} {item.currency}
+                            {item.transitDays} 天 · {item.estimatedCost} {item.currency}
                             {'\n'}
                             {item.planText}
                           </Paragraph>
@@ -2136,91 +2771,91 @@ export default function App() {
       </Drawer>
 
       <Modal
-        title="鐢熸垚杩愯緭鏂规"
+        title="生成运输方案"
         open={planModalOpen}
         onCancel={() => setPlanModalOpen(false)}
         onOk={() => planForm.submit()}
-        okText="鐢熸垚鏂规"
+        okText="生成方案"
         width={680}
       >
         <Alert
           type="info"
           showIcon
           style={{ marginBottom: 16 }}
-          message="????????????????????????"
+          message="可直接生成系统建议方案，也可以填写后覆盖生成。"
         />
         <Form form={planForm} layout="vertical" onFinish={(values) => void generatePlan(values)}>
-          <Form.Item name="title" label="鏂规鏍囬">
-            <Input placeholder="???????" />
+          <Form.Item name="title" label="方案标题">
+            <Input placeholder="例如：中亚陆运方案" />
           </Form.Item>
-          <Form.Item name="route" label="鎺ㄨ崘璺嚎">
-            <Input placeholder="????????????????????" />
+          <Form.Item name="route" label="推荐路线">
+            <Input placeholder="例如：上海 - 霍尔果斯 - 阿拉木图" />
           </Form.Item>
           <Row gutter={12}>
             <Col span={8}>
-              <Form.Item name="transitDays" label="棰勮澶╂暟">
+              <Form.Item name="transitDays" label="预计天数">
                 <InputNumber min={1} style={{ width: '100%' }} />
               </Form.Item>
             </Col>
             <Col span={8}>
-              <Form.Item name="estimatedCost" label="棰勪及璐圭敤">
+              <Form.Item name="estimatedCost" label="预计费用">
                 <InputNumber min={0} style={{ width: '100%' }} />
               </Form.Item>
             </Col>
             <Col span={8}>
-              <Form.Item name="currency" label="甯佺" initialValue="USD">
+              <Form.Item name="currency" label="币种" initialValue="USD">
                 <Select options={['USD', 'CNY', 'KZT', 'EUR'].map((value) => ({ value, label: value }))} />
               </Form.Item>
             </Col>
           </Row>
-          <Form.Item name="planText" label="鏂规璇存槑">
-            <TextArea rows={5} placeholder="涓嶅～鍒欒嚜鍔ㄧ敓鎴愭搷浣滆妭鐐广€侀闄╂彁绀哄拰璐圭敤璇存槑" />
+          <Form.Item name="planText" label="方案说明">
+            <TextArea rows={5} placeholder="不填写则自动生成操作节点、风险提示和费用说明" />
           </Form.Item>
         </Form>
       </Modal>
 
       <Modal
-        title={selectedInquiry ? `???? ${selectedInquiry.inquiryNo}` : '????'}
+        title={selectedInquiry ? `报价上传 ${selectedInquiry.inquiryNo}` : '报价上传'}
         open={quoteModalOpen}
         onCancel={() => setQuoteModalOpen(false)}
         onOk={() => quoteForm.submit()}
-        okText="鎻愪氦鎶ヤ环"
+        okText="提交报价"
         width={680}
       >
         <Form form={quoteForm} layout="vertical" initialValues={{ quoteCurrency: 'USD' }} onFinish={(values) => void submitQuote(values)}>
           <Row gutter={12}>
             <Col span={12}>
-              <Form.Item name="quoteAmount" label="鎶ヤ环閲戦">
+              <Form.Item name="quoteAmount" label="报价金额">
                 <InputNumber min={0} style={{ width: '100%' }} />
               </Form.Item>
             </Col>
             <Col span={12}>
-              <Form.Item name="quoteCurrency" label="甯佺">
+              <Form.Item name="quoteCurrency" label="币种">
                 <Select options={['USD', 'CNY', 'KZT', 'EUR'].map((value) => ({ value, label: value }))} />
               </Form.Item>
             </Col>
           </Row>
-          <Form.Item name="quoteRemark" label="????">
-            <TextArea rows={4} placeholder="????????????????????" />
+          <Form.Item name="quoteRemark" label="报价备注">
+            <TextArea rows={4} placeholder="填写报价说明、有效期、费用包含范围等" />
           </Form.Item>
           <Form.Item
             name="quoteUploadFiles"
-            label="涓婁紶鎶ヤ环"
+            label="上传报价"
             valuePropName="fileList"
             getValueFromEvent={(event) => event?.fileList ?? []}
           >
             <Upload beforeUpload={beforeQuoteAttachmentUpload} multiple accept=".jpg,.jpeg,.png,.pdf">
-              <Button icon={<UploadOutlined />}>閫夋嫨鎶ヤ环鏂囦欢</Button>
+              <Button icon={<UploadOutlined />}>选择报价文件</Button>
             </Upload>
           </Form.Item>
           <Form.Item
             name="solutionUploadFiles"
-            label="涓婁紶鏂规闄勪欢"
+            label="上传方案附件"
             valuePropName="fileList"
             getValueFromEvent={(event) => event?.fileList ?? []}
           >
             <Upload beforeUpload={beforeQuoteAttachmentUpload} multiple accept=".jpg,.jpeg,.png,.pdf">
-              <Button icon={<UploadOutlined />}>閫夋嫨鏂规闄勪欢</Button>
+              <Button icon={<UploadOutlined />}>选择方案附件</Button>
             </Upload>
           </Form.Item>
         </Form>
@@ -2413,8 +3048,8 @@ export default function App() {
         <Form form={vehicleTypeForm} layout="vertical" onFinish={(values) => void saveVehicleType(values)}>
           <Row gutter={12}>
             <Col span={8}>
-              <Form.Item name="priceSort" label="价格排序">
-                <InputNumber min={1} precision={0} style={{ width: '100%' }} placeholder="数值越小越优先" />
+              <Form.Item name="priceWeight" label="价格权重">
+                <InputNumber min={1} precision={0} style={{ width: '100%' }} placeholder="数值越大越贵" />
               </Form.Item>
             </Col>
           </Row>
@@ -2453,11 +3088,23 @@ export default function App() {
             </Col>
           </Row>
           <Row gutter={12}>
-            <Col span={12}>
+            <Col span={8}>
               <Form.Item name="effectiveLength" label="有效长度">
                 <InputNumber min={0} style={{ width: '100%' }} />
               </Form.Item>
             </Col>
+            <Col span={8}>
+              <Form.Item name="effectiveWidth" label="有效宽度">
+                <InputNumber min={0} style={{ width: '100%' }} />
+              </Form.Item>
+            </Col>
+            <Col span={8}>
+              <Form.Item name="effectiveHeight" label="有效高度">
+                <InputNumber min={0} style={{ width: '100%' }} />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Row gutter={12}>
             <Col span={12}>
               <Form.Item name="effectiveVolume" label="有效方数">
                 <InputNumber min={0} style={{ width: '100%' }} />
@@ -2466,6 +3113,146 @@ export default function App() {
           </Row>
           <Form.Item name="scenario" label="适用场景">
             <TextArea rows={4} placeholder="例如：适合普通机械、冷链货物、大件超限运输等" />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
+        title={editingLoadingRule ? '编辑配载规则' : '新增配载规则'}
+        open={loadingRuleModalOpen}
+        onCancel={() => {
+          setLoadingRuleModalOpen(false);
+          setEditingLoadingRule(null);
+          loadingRuleForm.resetFields();
+        }}
+        onOk={() => loadingRuleForm.submit()}
+        okText="保存"
+        width={760}
+      >
+        <Form form={loadingRuleForm} layout="vertical" onFinish={(values) => void saveLoadingRule(values)}>
+          <Row gutter={12}>
+            <Col span={8}>
+              <Form.Item name="sortOrder" label="排序">
+                <InputNumber min={0} precision={0} style={{ width: '100%' }} />
+              </Form.Item>
+            </Col>
+            <Col span={8}>
+              <Form.Item name="category" label="分类" rules={[{ required: true, message: '请选择分类' }]}>
+                <Select options={loadingRuleCategoryOptions} />
+              </Form.Item>
+            </Col>
+            <Col span={8}>
+              <Form.Item name="enabled" label="是否启用" valuePropName="checked">
+                <Switch checkedChildren="启用" unCheckedChildren="停用" />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Row gutter={12}>
+            <Col span={12}>
+              <Form.Item name="ruleName" label="规则名称" rules={[{ required: true, message: '请输入规则名称' }]}>
+                <Input placeholder="例如：俄罗斯车货总高上限" />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item name="ruleCode" label="规则编码" rules={[{ required: true, message: '请输入规则编码' }]}>
+                <Input placeholder="例如：russiaMaxVehicleCargoHeightMm" />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Form.Item name="applicableCountries" label="适用国家">
+            <Select
+              mode="multiple"
+              allowClear
+              placeholder="不选择表示全线路通用"
+              options={countryOptions}
+            />
+          </Form.Item>
+          <Row gutter={12}>
+            <Col span={8}>
+              <Form.Item name="valueType" label="值类型" rules={[{ required: true, message: '请选择值类型' }]}>
+                <Select
+                  options={[
+                    { value: 'number', label: '数字' },
+                    { value: 'text', label: '文本' },
+                    { value: 'boolean', label: '开关' },
+                    { value: 'json', label: 'JSON' },
+                  ]}
+                />
+              </Form.Item>
+            </Col>
+            <Col span={10}>
+              <Form.Item name="ruleValue" label="规则值" rules={[{ required: true, message: '请输入规则值' }]}>
+                <Input placeholder="例如：5200" />
+              </Form.Item>
+            </Col>
+            <Col span={6}>
+              <Form.Item name="unit" label="单位">
+                <Input placeholder="mm / kg / m3" />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Form.Item name="description" label="规则说明">
+            <TextArea rows={4} placeholder="说明规则适用场景、业务含义和风险提示" />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
+        title="配载 AI 优化配置"
+        open={loadingAiConfigModalOpen}
+        onCancel={() => {
+          setLoadingAiConfigModalOpen(false);
+          loadingAiConfigForm.resetFields();
+        }}
+        onOk={() => loadingAiConfigForm.submit()}
+        okText="保存"
+        width={820}
+      >
+        <Form form={loadingAiConfigForm} layout="vertical" onFinish={(values) => void saveLoadingAiConfig(values)}>
+          <Row gutter={12}>
+            <Col span={8}>
+              <Form.Item name="enabled" label="是否启用" valuePropName="checked">
+                <Switch checkedChildren="启用" unCheckedChildren="停用" />
+              </Form.Item>
+            </Col>
+            <Col span={8}>
+              <Form.Item name="provider" label="服务商" rules={[{ required: true, message: '请输入服务商' }]}>
+                <Input placeholder="openai" />
+              </Form.Item>
+            </Col>
+            <Col span={8}>
+              <Form.Item name="model" label="模型" rules={[{ required: true, message: '请输入模型' }]}>
+                <Input placeholder="gpt-4.1-mini" />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Form.Item name="apiBaseUrl" label="API 地址" rules={[{ required: true, message: '请输入 API 地址' }]}>
+            <Input placeholder="https://api.openai.com/v1/responses" />
+          </Form.Item>
+          <Form.Item
+            name="apiKey"
+            label={`API Key${loadingAiConfig?.hasApiKey ? `（当前：${loadingAiConfig.apiKeyMasked || '已配置'}）` : ''}`}
+            extra="留空表示不修改现有 Key；输入新 Key 后会覆盖数据库配置。"
+          >
+            <Input.Password placeholder="sk-..." autoComplete="new-password" />
+          </Form.Item>
+          <Row gutter={12}>
+            <Col span={12}>
+              <Form.Item name="temperature" label="温度">
+                <InputNumber min={0} max={2} step={0.1} style={{ width: '100%' }} />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item name="maxOutputTokens" label="最大输出 Token">
+                <InputNumber min={256} max={8000} precision={0} style={{ width: '100%' }} />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Form.Item name="systemPrompt" label="系统提示词">
+            <TextArea rows={5} placeholder="定义 AI 配载分析角色、判断规则和输出要求" />
+          </Form.Item>
+          <Form.Item name="notes" label="备注">
+            <TextArea rows={3} />
           </Form.Item>
         </Form>
       </Modal>

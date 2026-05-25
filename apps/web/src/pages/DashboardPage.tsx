@@ -13,6 +13,7 @@ import type { ColumnsType } from 'antd/es/table';
 import { useEffect, useState } from 'react';
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { apiRequest } from '../api/client';
+import { formatBeijingTime } from '../utils/date';
 
 const { Text, Title } = Typography;
 
@@ -247,7 +248,7 @@ export function DashboardPage() {
                 <Space direction="vertical" size={2}>
                   <Text strong>{item.taskNo} · {item.nodeName} · {item.trackingStatus || '跟踪记录'}</Text>
                   <Text>{item.content}</Text>
-                  <Text type="secondary">{item.location || '-'} · {item.trackedAt}</Text>
+                  <Text type="secondary">{item.location || '-'} · {formatBeijingTime(item.trackedAt, true)}</Text>
                 </Space>
               ),
             }))}

@@ -2,6 +2,7 @@ import { Button, Card, Col, Drawer, Form, Input, List, Row, Select, Table, Tabs,
 import { useEffect, useState } from 'react';
 import { apiRequest } from '../api/client';
 import { PageHeader } from '../components/PageHeader';
+import { formatBeijingTime } from '../utils/date';
 
 export function SystemAdminPage() {
   const [roleForm] = Form.useForm();
@@ -168,7 +169,7 @@ export function SystemAdminPage() {
                     { title: '动作', dataIndex: 'actionType' },
                     { title: '业务编号', dataIndex: 'businessId' },
                     { title: '操作人', dataIndex: 'operatorName' },
-                    { title: '时间', dataIndex: 'actionTime' },
+                    { title: '时间', dataIndex: 'actionTime', render: (value) => formatBeijingTime(value, true) },
                   ]}
                 />
               ),

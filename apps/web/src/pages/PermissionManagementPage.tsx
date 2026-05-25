@@ -1,7 +1,7 @@
 import { Button, Card, Checkbox, Drawer, Form, Input, Modal, Select, Space, Switch, Table, Tabs, Tag, Typography, message } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useEffect, useMemo, useState } from 'react';
-import { EditOutlined, PlusOutlined } from '@ant-design/icons';
+import { DeleteOutlined, EditOutlined, PlusOutlined } from '@ant-design/icons';
 import { apiRequest } from '../api/client';
 
 const { Text } = Typography;
@@ -155,6 +155,25 @@ export function PermissionManagementPage() {
     }
   };
 
+  const deleteRole = (role: RbacRole) => {
+    Modal.confirm({
+      title: '删除角色',
+      content: `确认删除角色「${role.name}」？删除后会同步解除员工和流程节点中的角色关联。`,
+      okText: '删除',
+      okButtonProps: { danger: true },
+      cancelText: '取消',
+      onOk: async () => {
+        try {
+          await apiRequest(`/api/rbac/roles/${role.id}`, { method: 'DELETE' });
+          message.success('角色已删除');
+          await load();
+        } catch (error) {
+          message.error((error as Error).message);
+        }
+      },
+    });
+  };
+
   const saveEmployee = async (values: EmployeeFormValues) => {
     try {
       const { roleIds, ...employeeValues } = values;
@@ -248,6 +267,19 @@ export function PermissionManagementPage() {
     },
   ];
 
+  const roleColumnsWithDelete: ColumnsType<RbacRole> = [
+    ...roleColumns,
+    {
+      title: '删除',
+      width: 100,
+      render: (_, row) => (
+        <Button size="small" danger icon={<DeleteOutlined />} onClick={() => deleteRole(row)} disabled={['admin', 'ADMIN'].includes(row.code)}>
+          删除
+        </Button>
+      ),
+    },
+  ];
+
   const permissionColumns: ColumnsType<RbacPermission> = [
     { title: '模块', dataIndex: 'module', width: 160 },
     { title: '权限名称', dataIndex: 'name', width: 180 },
@@ -281,7 +313,7 @@ export function PermissionManagementPage() {
                   <Button type="primary" icon={<PlusOutlined />} onClick={() => openRoleDrawer()}>
                     新增角色
                   </Button>
-                  <Table rowKey="id" loading={loading} dataSource={roles} columns={roleColumns} pagination={{ pageSize: 8 }} />
+                  <Table rowKey="id" loading={loading} dataSource={roles} columns={roleColumnsWithDelete} pagination={{ pageSize: 8 }} />
                 </Space>
               ),
             },

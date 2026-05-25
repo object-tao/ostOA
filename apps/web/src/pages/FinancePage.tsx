@@ -29,6 +29,7 @@ import type { ColumnsType } from 'antd/es/table';
 import { useEffect, useMemo, useState } from 'react';
 import type { Key } from 'react';
 import { apiRequest } from '../api/client';
+import { formatBeijingTime } from '../utils/date';
 
 const { Text } = Typography;
 const { TextArea } = Input;
@@ -325,7 +326,7 @@ export function FinancePage() {
     { title: '标题', dataIndex: 'title', width: 220 },
     { title: '金额(CNY)', dataIndex: 'totalAmountCny', width: 140, align: 'right', render: money },
     { title: '状态', dataIndex: 'status', width: 120, render: statusTag },
-    { title: '确认时间', dataIndex: 'confirmedAt', width: 190, render: (value) => value || '-' },
+    { title: '确认时间', dataIndex: 'confirmedAt', width: 190, render: (value) => formatBeijingTime(value, true) },
     {
       title: '操作',
       width: 180,
@@ -352,7 +353,7 @@ export function FinancePage() {
     { title: '标题', dataIndex: 'title', width: 220 },
     { title: '金额(CNY)', dataIndex: 'totalAmountCny', width: 140, align: 'right', render: money },
     { title: '状态', dataIndex: 'status', width: 130, render: statusTag },
-    { title: '提交时间', dataIndex: 'submittedAt', width: 190, render: (value) => value || '-' },
+    { title: '提交时间', dataIndex: 'submittedAt', width: 190, render: (value) => formatBeijingTime(value, true) },
     {
       title: '操作',
       width: 190,
@@ -418,7 +419,7 @@ export function FinancePage() {
                     </Button>
                     <Button icon={<WalletOutlined />} disabled={!selectedReceivables.length} onClick={() => {
                       billForm.resetFields();
-                      billForm.setFieldsValue({ title: `客户账单 ${new Date().toLocaleDateString()}` });
+                      billForm.setFieldsValue({ title: `客户账单 ${formatBeijingTime(new Date().toISOString()).slice(0, 10)}` });
                       setBillOpen(true);
                     }}>
                       生成客户账单
@@ -450,7 +451,7 @@ export function FinancePage() {
                     </Button>
                     <Button icon={<CheckCircleOutlined />} disabled={!selectedPayables.length} onClick={() => {
                       paymentForm.resetFields();
-                      paymentForm.setFieldsValue({ title: `付款申请 ${new Date().toLocaleDateString()}` });
+                      paymentForm.setFieldsValue({ title: `付款申请 ${formatBeijingTime(new Date().toISOString()).slice(0, 10)}` });
                       setPaymentOpen(true);
                     }}>
                       提交付款申请

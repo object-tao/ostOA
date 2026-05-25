@@ -39,6 +39,7 @@ import {
   UploadOutlined,
 } from '@ant-design/icons';
 import { apiRequest } from '../api/client';
+import { beijingTimeValue, formatBeijingTime } from '../utils/date';
 
 type ProjectCustomer = {
   id: string;
@@ -378,17 +379,13 @@ const fileUrl = (url: string) => {
 const toDateValue = (value?: string | null) => (value ? dayjs(value) : undefined);
 const serializeDateValue = (value: unknown, format = 'YYYY-MM-DD') => (dayjs.isDayjs(value) ? value.format(format) : value || null);
 const trackingTimeValue = (value?: string | null) => {
-  if (!value) return 0;
-  const normalized = value.includes('T') ? value : value.replace(' ', 'T');
-  const parsed = dayjs(normalized);
-  return parsed.isValid() ? parsed.valueOf() : 0;
+  return beijingTimeValue(value);
 };
 const trackingDateText = (value?: string | null) => {
-  if (!value) return '-';
-  const normalized = value.includes('T') ? value : value.replace(' ', 'T');
-  const parsed = dayjs(normalized);
-  return parsed.isValid() ? parsed.format('YYYY-MM-DD HH:mm') : value.replace('T', ' ').replace(/Z$/, '').slice(0, 16);
+  return formatBeijingTime(value);
 };
+const isWorkflowNodeStarted = (node: Pick<WorkflowInstanceNode, 'startedAt' | 'status'>) =>
+  Boolean(node.startedAt) || ['处理中', '已完成', '已退回', '已跳过', '已挂起', '异常'].includes(node.status);
 const sortTrackingRecords = <T extends { trackedAt?: string | null; createdAt?: string | null }>(records?: T[]) =>
   [...(records ?? [])].sort((a, b) => trackingTimeValue(b.trackedAt || b.createdAt) - trackingTimeValue(a.trackedAt || a.createdAt));
 const isCompletedTask = (task?: Pick<OversizeTask, 'status' | 'workflowStatus' | 'progress'> | null) =>
@@ -794,7 +791,8 @@ export function OversizeProjectManagementPage({ customers }: OversizeProjectMana
     { title: '服务车辆', dataIndex: 'vehiclePlateNo', width: 130, render: (value) => value || '-' },
     { title: '服务司机', dataIndex: 'driverName', width: 120, render: (value) => value || '-' },
     { title: '计划/超时', width: 170, render: (_, record) => ('timeoutAt' in record ? record.timeoutAt || '-' : (record as OversizeTaskNode).plannedDate || '-') },
-    { title: '完成时间', dataIndex: 'completedAt', width: 170 },
+    { title: '开始时间', dataIndex: 'startedAt', width: 150, render: (value) => trackingDateText(value) },
+    { title: '完成时间', dataIndex: 'completedAt', width: 150, render: (value) => trackingDateText(value) },
     { title: '状态', dataIndex: 'status', width: 100, render: (value) => <Tag color={statusColor[value] ?? 'default'}>{value}</Tag> },
     {
       title: '资料',
@@ -1455,6 +1453,7 @@ export function OversizeTaskManagementPage({ openRequest }: { openRequest?: Over
     );
     workflowForm.setFieldsValue({
       operator: '',
+      operationTime: dayjs(),
       remark: '',
       uploadFiles: [],
       customerVisible: false,
@@ -1634,6 +1633,7 @@ export function OversizeTaskManagementPage({ openRequest }: { openRequest?: Over
         method: 'POST',
         body: JSON.stringify({
           operator: values.operator,
+          operationTime: serializeDateValue(values.operationTime, 'YYYY-MM-DD HH:mm'),
           remark: values.remark,
           customerVisible: values.customerVisible,
           visibilityLevel: values.visibilityLevel,
@@ -2038,8 +2038,9 @@ export function OversizeTaskManagementPage({ openRequest }: { openRequest?: Over
                   { title: '节点', dataIndex: 'nodeName', width: 130 },
                   { title: '负责人', dataIndex: 'owner', width: 120, render: (value) => value || '-' },
                   { title: '类型', dataIndex: 'nodeType', width: 110 },
-                  { title: '超时', dataIndex: 'timeoutAt', width: 170, render: (value) => value || '-' },
-                  { title: '完成时间', dataIndex: 'completedAt', width: 170, render: (value) => value || '-' },
+                  { title: '超时', dataIndex: 'timeoutAt', width: 150, render: (value) => trackingDateText(value) },
+                  { title: '开始时间', dataIndex: 'startedAt', width: 150, render: (value) => trackingDateText(value) },
+                  { title: '完成时间', dataIndex: 'completedAt', width: 150, render: (value) => trackingDateText(value) },
                   { title: '状态', dataIndex: 'status', width: 100, render: (value) => <Tag color={statusColor[value] ?? 'default'}>{value}</Tag> },
                   {
                     title: '跟踪',
@@ -2073,13 +2074,13 @@ export function OversizeTaskManagementPage({ openRequest }: { openRequest?: Over
                   },
                   {
                     title: '操作',
-                    width: 260,
+                    width: 300,
                     fixed: 'right',
                     render: (_, record) =>
                       taskWorkflow?.currentNodeId === record.id && !isCompletedTask(selectedTask) ? (
                         <Space wrap>
-                          <Button size="small" onClick={() => openWorkflowNodeModal(record, 'start')}>开始</Button>
-                          <Button size="small" type="primary" onClick={() => openWorkflowNodeModal(record, 'submit')}>提交</Button>
+                          <Button size="small" disabled={isWorkflowNodeStarted(record)} onClick={() => openWorkflowNodeModal(record, 'start')}>开始</Button>
+                          <Button size="small" type="primary" disabled={!isWorkflowNodeStarted(record)} onClick={() => openWorkflowNodeModal(record, 'submit')}>提交</Button>
                           <Button size="small" onClick={() => openWorkflowNodeModal(record, 'return')}>退回</Button>
                           {record.allowSkip ? <Button size="small" onClick={() => openWorkflowNodeModal(record, 'skip')}>跳过</Button> : null}
                           <Button size="small" onClick={() => openWorkflowNodeModal(record, 'hold')}>挂起</Button>
@@ -2188,7 +2189,7 @@ export function OversizeTaskManagementPage({ openRequest }: { openRequest?: Over
                 pagination={false}
                 dataSource={costItems}
                 columns={[
-                  { title: '时间', dataIndex: 'createdAt', width: 170, render: (value) => value || '-' },
+                  { title: '时间', dataIndex: 'createdAt', width: 170, render: (value) => trackingDateText(value) },
                   { title: '费用项', dataIndex: 'feeName', width: 160 },
                   { title: '节点', dataIndex: 'occurrenceStage', width: 130, render: (value) => value || '-' },
                   { title: '供应商', dataIndex: 'supplierName', width: 180, render: (value) => value || '-' },
@@ -2252,7 +2253,7 @@ export function OversizeTaskManagementPage({ openRequest }: { openRequest?: Over
                 pagination={false}
                 dataSource={(taskWorkflow?.transitions ?? []).filter((item) => workflowTransitionActions.includes(item.action))}
                 columns={[
-                  { title: '时间', dataIndex: 'createdAt', width: 170 },
+                  { title: '时间', dataIndex: 'createdAt', width: 170, render: (value) => trackingDateText(value) },
                   { title: '动作', dataIndex: 'action', width: 100 },
                   { title: '原节点', dataIndex: 'fromNodeName', width: 130 },
                   { title: '目标节点', dataIndex: 'toNodeName', width: 130 },
@@ -2287,6 +2288,11 @@ export function OversizeTaskManagementPage({ openRequest }: { openRequest?: Over
                   options={employeeSelectOptions}
                   placeholder="请选择操作人"
                 />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item name="operationTime" label="操作时间" rules={[{ required: true, message: '请选择操作时间' }]}>
+                <DatePicker showTime style={{ width: '100%' }} />
               </Form.Item>
             </Col>
           </Row>

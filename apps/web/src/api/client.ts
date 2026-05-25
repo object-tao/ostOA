@@ -1,6 +1,6 @@
 import { clearSession, getToken } from './auth';
 
-const configuredApiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? 'http://127.0.0.1:8787';
+const configuredApiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? 'https://api.ostoa.org';
 const isLocalBrowser =
   typeof window !== 'undefined' &&
   (window.location.hostname === '127.0.0.1' ||

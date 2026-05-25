@@ -26,6 +26,7 @@ import type { UploadProps } from 'antd';
 import { useEffect, useMemo, useState } from 'react';
 import { apiRequest } from '../api/client';
 import { PageHeader } from '../components/PageHeader';
+import { formatBeijingTime } from '../utils/date';
 
 type CountryRule = {
   id: string;
@@ -881,7 +882,7 @@ export function OversizeTransportPage() {
 
       const country = rules.find((item) => item.countryCode === freightValues.countryCode);
       const solution: SavedSolution = {
-        savedAt: new Date().toLocaleString('zh-CN'),
+        savedAt: formatBeijingTime(new Date().toISOString(), true),
         quoteNo: savedQuote.quoteNo,
         route: `${freightValues.originPlace} -> ${freightValues.destinationPlace}`,
         countryName: country?.countryName ?? freightValues.countryCode,

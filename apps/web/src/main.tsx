@@ -3,7 +3,13 @@ import ReactDOM from 'react-dom/client';
 import { ConfigProvider } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
 import App from './App';
+import MobileApp from './MobileApp';
 import './styles/global.css';
+
+const host = window.location.hostname.toLowerCase();
+const params = new URLSearchParams(window.location.search);
+const useMobileApp = host === 'm.ostoa.org' || host.startsWith('m.') || params.get('mobile') === '1';
+const RootApp = useMobileApp ? MobileApp : App;
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
@@ -36,7 +42,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
         },
       }}
     >
-      <App />
+      <RootApp />
     </ConfigProvider>
   </React.StrictMode>,
 );

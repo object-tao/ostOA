@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { apiRequest } from '../api/client';
 import { PageHeader } from '../components/PageHeader';
+import { formatBeijingTime } from '../utils/date';
 
 const projectStatusMap: Record<string, string> = {
   DRAFT: '草稿',
@@ -105,7 +106,7 @@ export function ProjectDetailPage() {
             <Timeline
               items={project.vehicleOrders.flatMap((order: any) =>
                 order.trackingNodes.map((node: any) => ({
-                  children: `${order.vehicleOrderNo} · ${node.nodeName} · ${new Date(node.nodeTime).toLocaleString()}`,
+                  children: `${order.vehicleOrderNo} · ${node.nodeName} · ${formatBeijingTime(node.nodeTime, true)}`,
                 })),
               )}
             />
