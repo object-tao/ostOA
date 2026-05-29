@@ -70,6 +70,7 @@ type Supplier = {
   name: string;
   supplierCode?: string | null;
   type: string;
+  types?: string[];
   contactInfo?: string | null;
   payee?: string | null;
   bankPhone?: string | null;
@@ -91,6 +92,11 @@ const customerContractStatuses = ['未签署', '签署中', '已签署', '已过
 
 function fileListValue(event: { fileList?: UploadFile[] }) {
   return event?.fileList ?? [];
+}
+
+function supplierRoleList(supplier?: Pick<Supplier, 'type' | 'types'> | null) {
+  const values = [...(supplier?.types ?? []), supplier?.type].map((item) => String(item ?? '').trim()).filter(Boolean);
+  return [...new Set(values)];
 }
 
 function fileLinks(files?: ManagedFile[]) {
@@ -249,7 +255,7 @@ export function SupplierManagementPage() {
   const openSupplier = (record?: Supplier) => {
     setEditingSupplier(record ?? null);
     supplierForm.resetFields();
-    supplierForm.setFieldsValue(record ? { ...record, attachmentUploads: [], contractUploads: [] } : { type: '国内车队', contractStatus: '未签署', attachmentUploads: [], contractUploads: [] });
+    supplierForm.setFieldsValue(record ? { ...record, types: supplierRoleList(record), attachmentUploads: [], contractUploads: [] } : { types: ['国内车队'], contractStatus: '未签署', attachmentUploads: [], contractUploads: [] });
     setSupplierOpen(true);
   };
 
@@ -380,7 +386,7 @@ export function SupplierManagementPage() {
         ),
     },
     { title: '供应商名称', dataIndex: 'name', width: 240 },
-    { title: '类型', dataIndex: 'type', width: 140, render: (value) => <Tag color="blue">{value}</Tag> },
+    { title: '类型', dataIndex: 'types', width: 220, render: (_, row) => <Space wrap>{supplierRoleList(row).map((item) => <Tag color="blue" key={item}>{item}</Tag>)}</Space> },
     { title: '联系方式', dataIndex: 'contactInfo', width: 180, render: (value) => value || '-' },
     { title: '合同状态', dataIndex: 'contractStatus', width: 120, render: (value) => <Tag color={value === '已签署' ? 'green' : value === '签署中' ? 'blue' : value === '已过期' ? 'red' : 'default'}>{value || '未签署'}</Tag> },
     { title: '合同附件', width: 100, render: (_, row) => row.contractFiles?.length ?? 0 },
@@ -468,7 +474,7 @@ export function SupplierManagementPage() {
                 <Input disabled placeholder="系统自动生成" />
               </Form.Item>
             </Col>
-            <Col span={8}><Form.Item name="type" label="类型" rules={[{ required: true, message: '请选择类型' }]}><Select options={supplierTypes.map((value) => ({ value, label: value }))} /></Form.Item></Col>
+            <Col span={8}><Form.Item name="types" label="类型" rules={[{ required: true, message: '请选择类型' }]}><Select mode="multiple" allowClear options={supplierTypes.map((value) => ({ value, label: value }))} /></Form.Item></Col>
           </Row>
           <Form.Item name="contactInfo" label="联系方式"><Input /></Form.Item>
           <Row gutter={12}>
@@ -500,7 +506,7 @@ export function SupplierManagementPage() {
             <Descriptions bordered column={2} size="small">
               <Descriptions.Item label="供应商名称">{detailSupplier.name}</Descriptions.Item>
               <Descriptions.Item label="供应商编号">{detailSupplier.supplierCode || '-'}</Descriptions.Item>
-              <Descriptions.Item label="类型">{detailSupplier.type}</Descriptions.Item>
+              <Descriptions.Item label="类型">{supplierRoleList(detailSupplier).join('、') || '-'}</Descriptions.Item>
               <Descriptions.Item label="联系方式">{detailSupplier.contactInfo || '-'}</Descriptions.Item>
               <Descriptions.Item label="收款人">{detailSupplier.payee || '-'}</Descriptions.Item>
               <Descriptions.Item label="开户手机">{detailSupplier.bankPhone || '-'}</Descriptions.Item>

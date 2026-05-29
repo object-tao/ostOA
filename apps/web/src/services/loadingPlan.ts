@@ -128,6 +128,35 @@ export const loadingRules = {
   flatbedCostPlanLengthMm: 17_000,
   mediumFlatbedSeedWeightKg: 12_000,
   russiaMaxVehicleCargoHeightMm: 5_200,
+  multiCargoHardSplitWeightKg: 44_000,
+  multiCargoRiskSplitWeightKg: 42_000,
+  russiaBatchMinItems: 40,
+  russiaFlatbedRequiredWidthMm: 2_500,
+  russiaTarpPreferredWidthMm: 2_450,
+  russiaHighCargoMm: 3_300,
+  automotiveBatchMinItems: 300,
+  automotivePlanLengthMm: 17_200,
+  automotiveWideLinearWidthMm: 3_400,
+  automotiveFlatbedGroupMaxWeightKg: 33_000,
+  automotiveOversizeGroupMaxWeightKg: 90_000,
+  mixedLongProjectMinItems: 30,
+  mixedLongProjectMaxItems: 80,
+  mixedLongAnchorMinLengthMm: 9_000,
+  mixedLongCarrierMaxLengthMm: 18_500,
+  mixedBulkOversizeMaxWeightKg: 70_000,
+  russiaIndustrialMinItems: 10,
+  russiaIndustrialWideWidthMm: 3_000,
+  russiaIndustrialWideHeightMm: 3_300,
+  russiaIndustrialTarpMaxWeightKg: 27_000,
+  russiaHighWideFlatbedWidthMm: 3_100,
+  russiaHighWideFlatbedHeightMm: 3_200,
+  russiaTarpPreferredMaxWidthMm: 2_500,
+  russiaTarpPreferredMaxHeightMm: 2_500,
+  russiaTarpHardReviewWidthMm: 3_300,
+  russiaTarpSideBySideReviewWidthMm: 3_300,
+  russiaLongCargoMinLengthMm: 24_000,
+  russiaLongCargoTargetWidthMm: 3_000,
+  russiaLongCargoMaxGroupWeightKg: 70_000,
 };
 
 type LoadingRules = typeof loadingRules;
@@ -261,6 +290,9 @@ function isStackableLargeCargo(cargo: CargoItem) {
 }
 
 function flatbedCanCarryGroup(items: CargoItem[]) {
+  if (items.length > 1 && sumWeight(items) >= activeLoadingRules.multiCargoHardSplitWeightKg) {
+    return false;
+  }
   return sumWeight(items) <= activeLoadingRules.flatbedWeightLimitKg && items.every((item) => item.weightKg <= activeLoadingRules.flatbedWeightLimitKg);
 }
 
@@ -396,6 +428,81 @@ function chooseProjectTarp(vehicles: LoadingVehicle[]) {
   return vehicles.filter(isTarpVehicle).sort((a, b) => vehiclePriceSort(a) - vehiclePriceSort(b) || vehiclePayloadLimit(b) - vehiclePayloadLimit(a))[0] ?? chooseProjectFlatbed(vehicles);
 }
 
+function destinationCountries(options: LoadingPlanOptions) {
+  return options.destinationCountries?.length ? options.destinationCountries : options.destinationCountry ? [options.destinationCountry] : [];
+}
+
+function rawVehiclePayload(vehicle: LoadingVehicle) {
+  return positive(vehicle.payloadWeight) || vehiclePayloadLimit(vehicle);
+}
+
+function chooseAutomotiveFlatbed(vehicles: LoadingVehicle[], requiredWeight: number, widthMm: number) {
+  const targetAxle = requiredWeight > activeLoadingRules.flatbedWeightLimitKg || widthMm >= 2_900 ? 7 : requiredWeight > 26_000 || widthMm >= 2_700 ? 6 : 5;
+  const candidates = vehicles
+    .filter(isFlatbedVehicle)
+    .filter((vehicle) => rawVehiclePayload(vehicle) >= Math.min(requiredWeight, activeLoadingRules.automotiveFlatbedGroupMaxWeightKg))
+    .sort((a, b) => {
+      const aAxle = positive(a.axleCount ?? a.lineCount);
+      const bAxle = positive(b.axleCount ?? b.lineCount);
+      return Math.abs(aAxle - targetAxle) - Math.abs(bAxle - targetAxle) || vehiclePriceSort(a) - vehiclePriceSort(b) || rawVehiclePayload(a) - rawVehiclePayload(b);
+    });
+  return candidates[0] ?? chooseProjectFlatbed(vehicles);
+}
+
+function chooseAutomotiveTarp(vehicles: LoadingVehicle[], requiredWeight: number) {
+  const tarps = vehicles
+    .filter(isTarpVehicle)
+    .filter((vehicle) => rawVehiclePayload(vehicle) >= requiredWeight)
+    .sort((a, b) => vehiclePriceSort(a) - vehiclePriceSort(b) || rawVehiclePayload(a) - rawVehiclePayload(b));
+  return tarps[0] ?? chooseProjectTarp(vehicles);
+}
+
+function chooseAxleTarp(vehicles: LoadingVehicle[], requiredWeight: number, targetAxle = 6) {
+  const tarps = vehicles
+    .filter(isTarpVehicle)
+    .filter((vehicle) => rawVehiclePayload(vehicle) >= requiredWeight)
+    .sort((a, b) => {
+      const aAxle = positive(a.axleCount ?? a.lineCount);
+      const bAxle = positive(b.axleCount ?? b.lineCount);
+      return Math.abs(aAxle - targetAxle) - Math.abs(bAxle - targetAxle) || vehiclePriceSort(a) - vehiclePriceSort(b) || rawVehiclePayload(a) - rawVehiclePayload(b);
+    });
+  return tarps[0] ?? chooseAutomotiveTarp(vehicles, requiredWeight);
+}
+
+function chooseAxleFlatbed(vehicles: LoadingVehicle[], requiredWeight: number, targetAxle = 6) {
+  const flatbeds = vehicles
+    .filter(isFlatbedVehicle)
+    .filter((vehicle) => rawVehiclePayload(vehicle) >= requiredWeight)
+    .sort((a, b) => {
+      const aAxle = positive(a.axleCount ?? a.lineCount);
+      const bAxle = positive(b.axleCount ?? b.lineCount);
+      return Math.abs(aAxle - targetAxle) - Math.abs(bAxle - targetAxle) || vehiclePriceSort(a) - vehiclePriceSort(b) || rawVehiclePayload(a) - rawVehiclePayload(b);
+    });
+  return flatbeds[0] ?? chooseAutomotiveFlatbed(vehicles, requiredWeight, 0);
+}
+
+function chooseAutomotiveOversize(vehicles: LoadingVehicle[], requiredWeight: number, widthMm: number, heightMm: number) {
+  const oversizeVehicles = vehicles
+    .filter(isOversizeVehicle)
+    .filter((vehicle) => rawVehiclePayload(vehicle) >= requiredWeight)
+    .sort((a, b) => {
+      const aText = vehicleText(a);
+      const bText = vehicleText(b);
+      const aScore = Number(widthMm >= 3_600 && includesAny(aText, ['超低', '特种', '拼接'])) * 20 + Number(heightMm >= 3_600 && includesAny(aText, ['超低', '轴线'])) * 12;
+      const bScore = Number(widthMm >= 3_600 && includesAny(bText, ['超低', '特种', '拼接'])) * 20 + Number(heightMm >= 3_600 && includesAny(bText, ['超低', '轴线'])) * 12;
+      return bScore - aScore || vehiclePriceSort(a) - vehiclePriceSort(b) || rawVehiclePayload(a) - rawVehiclePayload(b);
+    });
+  return oversizeVehicles[0] ?? chooseAutomotiveFlatbed(vehicles, requiredWeight, widthMm);
+}
+
+function isRussiaDestination(options: LoadingPlanOptions) {
+  return destinationCountries(options).some((country) => country.includes('俄罗斯'));
+}
+
+function isUzbekistanDestination(options: LoadingPlanOptions) {
+  return destinationCountries(options).some((country) => country.includes('乌兹') || country.toLowerCase().includes('uzbek'));
+}
+
 function boxNumber(value: string) {
   const match = value.match(/^(\d+)(?:\/\d+)?$/);
   return match ? Number(match[1]) : null;
@@ -422,6 +529,128 @@ function isProjectBatch(pool: CargoUnit[]) {
   if (pool.length < activeLoadingRules.projectBatchMinItems) return false;
   const slashCount = pool.filter(hasSlashSeries).length;
   return slashCount / pool.length >= activeLoadingRules.projectBatchSlashRatio && pool.every((item) => item.weightKg <= activeLoadingRules.flatbedWeightLimitKg);
+}
+
+function isAutomotiveBatch(pool: CargoUnit[]) {
+  if (pool.length < activeLoadingRules.automotiveBatchMinItems || pool.some(hasSlashSeries)) return false;
+  const regularPieces = pool.filter((item) => item.lengthCm <= 18_000 && item.widthCm <= 4_800 && item.heightCm <= 4_500);
+  const mediumWidePieces = pool.filter((item) => item.widthCm >= 2_200 && item.widthCm <= 3_100).length;
+  return regularPieces.length / pool.length >= 0.9 && mediumWidePieces / pool.length >= 0.25;
+}
+
+function automotivePackedLengthMm(items: CargoItem[]) {
+  const width = maxWidth(items);
+  if (width >= activeLoadingRules.automotiveWideLinearWidthMm) {
+    return items.reduce((sum, item) => sum + placementLengthMm(item), 0);
+  }
+  const usableWidth = width >= 2_850 ? 3_000 : width >= 2_450 ? 2_800 : 2_450;
+  return floorPlanLengthMm(items, usableWidth);
+}
+
+function automotiveWidthBand(cargo: CargoItem) {
+  if (cargo.widthCm >= 3_400) return 'extra-wide';
+  if (cargo.widthCm >= 3_000 || cargo.heightCm >= 3_400) return 'wide-high';
+  if (cargo.widthCm >= 2_700) return 'wide';
+  if (cargo.widthCm >= 2_450) return 'medium-wide';
+  if (cargo.widthCm >= 2_200) return 'medium';
+  return 'normal';
+}
+
+function canAddToAutomotiveBin(bin: CargoItem[], cargo: CargoItem, maxItems: number, maxWeightKg: number, maxLengthMm: number) {
+  const next = [...bin, cargo];
+  return next.length <= maxItems && sumWeight(next) <= maxWeightKg && automotivePackedLengthMm(next) <= maxLengthMm;
+}
+
+function buildAutomotiveBatchBins(pool: CargoUnit[], vehicles: LoadingVehicle[]) {
+  if (!isAutomotiveBatch(pool)) {
+    return { bins: [] as WorkBin[], rest: pool };
+  }
+
+  const bins: WorkBin[] = [];
+  let rest = [...pool].sort((a, b) => b.widthCm - a.widthCm || b.heightCm - a.heightCm || b.weightKg - a.weightKg);
+  const maxLength = activeLoadingRules.automotivePlanLengthMm;
+
+  const groupConfigs: Record<string, { maxItems: number; maxWeightKg: number; preferTarp: boolean; method: string }> = {
+    'extra-wide': {
+      maxItems: 4,
+      maxWeightKg: activeLoadingRules.automotiveOversizeGroupMaxWeightKg,
+      preferTarp: false,
+      method: '汽车件超宽线性排布',
+    },
+    'wide-high': {
+      maxItems: 5,
+      maxWeightKg: activeLoadingRules.automotiveOversizeGroupMaxWeightKg,
+      preferTarp: false,
+      method: '汽车件宽高货平板集中',
+    },
+    wide: {
+      maxItems: 7,
+      maxWeightKg: activeLoadingRules.automotiveFlatbedGroupMaxWeightKg,
+      preferTarp: false,
+      method: '汽车件宽货平板面积折算',
+    },
+    'medium-wide': {
+      maxItems: 10,
+      maxWeightKg: activeLoadingRules.automotiveFlatbedGroupMaxWeightKg,
+      preferTarp: false,
+      method: '汽车件中宽货平板并车',
+    },
+    medium: {
+      maxItems: 18,
+      maxWeightKg: activeLoadingRules.automotiveFlatbedGroupMaxWeightKg,
+      preferTarp: true,
+      method: '汽车件篷布优先并排',
+    },
+    normal: {
+      maxItems: 34,
+      maxWeightKg: activeLoadingRules.automotiveFlatbedGroupMaxWeightKg,
+      preferTarp: true,
+      method: '汽车件小件篷布收尾',
+    },
+  };
+
+  while (rest.length) {
+    const seed = rest[0];
+    const band = automotiveWidthBand(seed);
+    const config = groupConfigs[band];
+    const group: CargoUnit[] = [seed];
+    rest = rest.slice(1);
+
+    for (const item of [...rest].sort((a, b) => b.weightKg - a.weightKg || b.widthCm - a.widthCm || b.lengthCm - a.lengthCm)) {
+      const sameBand = automotiveWidthBand(item) === band || (band === 'normal' && automotiveWidthBand(item) === 'medium');
+      if (!sameBand) continue;
+      if (!canAddToAutomotiveBin(group, item, config.maxItems, config.maxWeightKg, maxLength)) continue;
+      group.push(item);
+      rest = rest.filter((candidate) => candidate.unitId !== item.unitId);
+    }
+
+    const requiredWeight = sumWeight(group);
+    const width = maxWidth(group);
+    const height = group.reduce((max, item) => Math.max(max, item.heightCm), 0);
+    const vehicle =
+      width >= 3_400 || height >= 3_500 || requiredWeight > activeLoadingRules.automotiveFlatbedGroupMaxWeightKg
+        ? chooseAutomotiveOversize(vehicles, requiredWeight, width, height)
+        : config.preferTarp && width <= 2_500 && height <= 2_600
+          ? chooseAutomotiveTarp(vehicles, requiredWeight)
+          : chooseAutomotiveFlatbed(vehicles, requiredWeight, width);
+
+    if (!vehicle) {
+      rest = [...group, ...rest];
+      break;
+    }
+
+    bins.push({
+      vehicle,
+      method: config.method,
+      items: group,
+      warnings: [
+        `汽车大批量件按车组优化：估算排布长度 ${Math.round(automotivePackedLengthMm(group))}mm，最大宽 ${width}mm，最大高 ${height}mm。`,
+        '该规则按同事方案沉淀：优先控制整票总成本，再按宽高等级分组并复核绑扎、超限证和现场摆放。',
+      ],
+    });
+  }
+
+  return { bins, rest };
 }
 
 function takeMatching(pool: CargoUnit[], predicate: (item: CargoUnit) => boolean) {
@@ -501,6 +730,404 @@ function buildProjectBatchBins(pool: CargoUnit[], vehicles: LoadingVehicle[]) {
   return { bins, rest };
 }
 
+function canAddToRussiaCostBin(bin: CargoItem[], cargo: CargoItem, vehicle: LoadingVehicle, maxItems: number, maxVolumeCbm: number) {
+  const next = [...bin, cargo];
+  return (
+    next.length <= maxItems &&
+    sumWeight(next) <= Math.min(vehiclePayloadLimit(vehicle) || Number.MAX_SAFE_INTEGER, activeLoadingRules.indivisibleSingleVehicleKg) &&
+    sumVolume(next) <= maxVolumeCbm
+  );
+}
+
+function buildRussiaCostOptimizedBins(pool: CargoUnit[], vehicles: LoadingVehicle[], options: LoadingPlanOptions) {
+  const flatbed = chooseProjectFlatbed(vehicles);
+  const tarp = chooseProjectTarp(vehicles);
+  if (!isRussiaDestination(options) || !flatbed || !tarp || pool.length < activeLoadingRules.russiaBatchMinItems || pool.some(hasSlashSeries)) {
+    return { bins: [] as WorkBin[], rest: pool };
+  }
+
+  const bins: WorkBin[] = [];
+  let rest = [...pool];
+
+  const takeGroup = (
+    vehicle: LoadingVehicle,
+    method: string,
+    predicate: (item: CargoUnit) => boolean,
+    maxItems: number,
+    maxVolumeCbm: number,
+    warnings: string[],
+    sort: (a: CargoUnit, b: CargoUnit) => number = (a, b) => b.widthCm - a.widthCm || b.heightCm - a.heightCm || b.lengthCm - a.lengthCm,
+  ) => {
+    const group: CargoUnit[] = [];
+    for (const item of rest.filter(predicate).sort(sort)) {
+      if (!canAddToRussiaCostBin(group, item, vehicle, maxItems, maxVolumeCbm)) continue;
+      group.push(item);
+    }
+    if (!group.length) return;
+    bins.push({ vehicle, method, items: group, warnings });
+    rest = removeFromPool(rest, group);
+  };
+
+  takeGroup(
+    flatbed,
+    '俄罗斯宽货平板超限费集中处理',
+    (item) => item.widthCm >= activeLoadingRules.russiaFlatbedRequiredWidthMm && item.heightCm < activeLoadingRules.russiaHighCargoMm,
+    5,
+    125,
+    ['宽度超过俄罗斯篷布优选范围，集中平板办理超宽/超限费用，避免扩大整票高价车型数量。'],
+  );
+
+  takeGroup(
+    flatbed,
+    '俄罗斯高货平板集中处理',
+    (item) => item.heightCm >= activeLoadingRules.russiaHighCargoMm && item.widthCm >= 1_800,
+    5,
+    125,
+    ['高度 3300mm 以上货物优先平板，按俄罗斯车货总高 5200mm 复核。'],
+    (a, b) => b.widthCm - a.widthCm || b.heightCm - a.heightCm || b.weightKg - a.weightKg,
+  );
+
+  takeGroup(
+    flatbed,
+    '俄罗斯窄高货平板并排',
+    (item) => item.heightCm >= activeLoadingRules.russiaHighCargoMm || (item.widthCm <= 2_050 && item.heightCm >= 2_300),
+    9,
+    150,
+    ['窄高货按平板并排组合，减少车辆数；需现场复核车货总高、绑扎和侧向稳定。'],
+    (a, b) => b.heightCm - a.heightCm || b.lengthCm - a.lengthCm || b.weightKg - a.weightKg,
+  );
+
+  takeGroup(
+    tarp,
+    '俄罗斯篷布中宽货低成本组合',
+    (item) => item.widthCm <= activeLoadingRules.russiaTarpPreferredWidthMm && item.heightCm <= 2_900 && item.widthCm >= 2_100,
+    5,
+    110,
+    ['俄罗斯成本优化：可进篷布的中宽货优先篷布，装前复核内宽、内高和篷布结构。'],
+  );
+
+  takeGroup(
+    tarp,
+    '俄罗斯篷布中等件组合',
+    (item) => item.widthCm <= 2_400 && item.heightCm <= 2_900 && item.lengthCm <= 3_400,
+    5,
+    90,
+    ['中等尺寸货物优先使用低成本篷布车，现场复核装卸顺序。'],
+  );
+
+  takeGroup(
+    flatbed,
+    '俄罗斯长货平板超长处理',
+    (item) => item.lengthCm >= 3_700 || (item.lengthCm >= 2_200 && item.widthCm <= 1_800 && item.heightCm <= 1_500),
+    5,
+    85,
+    ['长货集中平板，必要时办理超长/超限费用，按整票总成本控制。'],
+    (a, b) => b.lengthCm - a.lengthCm || b.weightKg - a.weightKg,
+  );
+
+  takeGroup(
+    tarp,
+    '俄罗斯篷布普通件组合',
+    (item) => item.widthCm <= 2_200 && item.heightCm <= 2_900,
+    5,
+    80,
+    ['普通尺寸货物优先篷布，降低整票成本。'],
+  );
+
+  takeGroup(
+    tarp,
+    '俄罗斯篷布小件并排收尾',
+    () => true,
+    24,
+    105,
+    ['剩余小件集中篷布车并排收尾，按重货在下、轻货在上复核。'],
+    (a, b) => b.weightKg - a.weightKg || b.heightCm - a.heightCm || b.lengthCm - a.lengthCm,
+  );
+
+  return { bins: bins.filter((bin) => bin.items.length), rest };
+}
+
+function isMixedLongOversizeProject(pool: CargoUnit[]) {
+  if (
+    pool.length < activeLoadingRules.mixedLongProjectMinItems ||
+    pool.length > activeLoadingRules.mixedLongProjectMaxItems ||
+    pool.some(hasSlashSeries)
+  ) {
+    return false;
+  }
+  const extraLong = pool.filter((item) => item.lengthCm >= 20_000 && item.widthCm >= 3_500);
+  const longAnchors = pool.filter(
+    (item) =>
+      item.lengthCm >= activeLoadingRules.mixedLongAnchorMinLengthMm &&
+      item.lengthCm < 13_000 &&
+      item.widthCm >= 2_400 &&
+      item.widthCm <= 2_900,
+  );
+  const shortWide = pool.filter((item) => item.lengthCm >= 3_000 && item.lengthCm <= 4_200 && item.widthCm >= 2_600 && item.widthCm <= 3_000);
+  return extraLong.length >= 2 && longAnchors.length >= 2 && shortWide.length >= 2;
+}
+
+function buildMixedLongOversizeProjectBins(pool: CargoUnit[], vehicles: LoadingVehicle[], options: LoadingPlanOptions) {
+  const flatbed = chooseProjectFlatbed(vehicles);
+  if (!flatbed || !isMixedLongOversizeProject(pool)) {
+    return { bins: [] as WorkBin[], rest: pool };
+  }
+
+  const bins: WorkBin[] = [];
+  let rest = [...pool];
+
+  const take = (items: CargoUnit[]) => {
+    rest = removeFromPool(rest, items);
+    return items;
+  };
+
+  const addBin = (vehicle: LoadingVehicle, method: string, items: CargoUnit[], warnings: string[]) => {
+    if (!items.length) return;
+    bins.push({ vehicle, method, items: take(items), warnings });
+  };
+
+  const extraLong = rest.filter((item) => item.lengthCm >= 20_000 && item.widthCm >= 3_500).sort((a, b) => b.lengthCm - a.lengthCm || b.weightKg - a.weightKg);
+  for (const item of extraLong) {
+    const vehicle = chooseOversizeVehicle(vehicles, [item]);
+    if (vehicle) {
+      addBin(vehicle, '超限车超长单件运输', [item], ['20 米以上超长、超宽大件单独一车，按超限证、路线和转弯半径复核。']);
+    }
+  }
+
+  const anchors = rest
+    .filter((item) => item.lengthCm >= activeLoadingRules.mixedLongAnchorMinLengthMm && item.lengthCm <= 11_500 && item.widthCm >= 2_400 && item.widthCm <= 2_900)
+    .sort((a, b) => b.lengthCm - a.lengthCm || b.weightKg - a.weightKg);
+  for (const anchor of anchors) {
+    if (!rest.some((item) => item.unitId === anchor.unitId)) continue;
+    const group: CargoUnit[] = [anchor];
+    const fillers = rest
+      .filter((item) => item.unitId !== anchor.unitId)
+      .filter((item) => item.lengthCm >= 3_000 && item.lengthCm <= 4_200 && item.widthCm >= 2_600 && item.widthCm <= 3_000)
+      .sort((a, b) => b.weightKg - a.weightKg || b.lengthCm - a.lengthCm);
+    for (const filler of fillers) {
+      const next = [...group, filler];
+      if (next.length > 3) continue;
+      if (next.reduce((sum, item) => sum + placementLengthMm(item), 0) > activeLoadingRules.mixedLongCarrierMaxLengthMm) continue;
+      if (sumWeight(next) > activeLoadingRules.flatbedWeightLimitKg) continue;
+      group.push(filler);
+      if (group.length >= 3) break;
+    }
+    if (group.length >= 2) {
+      addBin(flatbed, '17米5轴平板长件带短宽件', group, ['长件带短宽件组合，按总长复核超长证和前后悬，宽度 2800mm 左右按超宽复核。']);
+    }
+  }
+
+  const reservedForFlatbed = rest
+    .filter((item) => item.lengthCm >= 4_800 && item.lengthCm <= 6_000 && item.widthCm >= 1_350 && item.widthCm <= 2_000)
+    .sort((a, b) => b.weightKg - a.weightKg || b.lengthCm - a.lengthCm);
+  const reservedIds = new Set(reservedForFlatbed.map((item) => item.unitId));
+  const bulkCandidates = rest
+    .filter((item) => !reservedIds.has(item.unitId))
+    .filter((item) => item.lengthCm <= 5_800 && item.widthCm <= 1_550 && item.heightCm <= 2_100)
+    .sort((a, b) => b.weightKg - a.weightKg || b.lengthCm - a.lengthCm);
+  const bulk: CargoUnit[] = [];
+  const bulkWeightLimit = isUzbekistanDestination(options) ? activeLoadingRules.multiCargoHardSplitWeightKg - 1 : activeLoadingRules.mixedBulkOversizeMaxWeightKg;
+  for (const item of bulkCandidates) {
+    if (sumWeight([...bulk, item]) > bulkWeightLimit) continue;
+    bulk.push(item);
+  }
+  if (bulk.length >= 8) {
+    const vehicle = chooseAutomotiveOversize(vehicles, sumWeight(bulk), maxWidth(bulk), bulk.reduce((max, item) => Math.max(max, item.heightCm), 0));
+    if (vehicle) {
+      addBin(vehicle, '超限车低矮小件集中合装', bulk, [
+        isUzbekistanDestination(options)
+          ? `乌兹别克规则：超限车多件合装控制在 ${activeLoadingRules.multiCargoHardSplitWeightKg}kg 以下，本车总重 ${sumWeight(bulk).toFixed(2)}kg。`
+          : `超限车特例：多件合装总重 ${sumWeight(bulk).toFixed(2)}kg，超过 44 吨时仅限非乌兹别克线路；必须人工复核轴荷、证件、路线和现场绑扎后才可执行。`,
+        '低矮小件集中消化用于降低整票车辆数和总成本，不作为普通平板/篷布默认规则。',
+      ]);
+    }
+  }
+
+  const finalGroup = [...rest].sort((a, b) => b.weightKg - a.weightKg || b.lengthCm - a.lengthCm);
+  if (finalGroup.length) {
+    addBin(flatbed, '17米5轴平板剩余件并排收尾', finalGroup, ['剩余中长件和轻小件并排/补位，按宽度、重心和绑扎复核。']);
+  }
+
+  return { bins, rest };
+}
+
+function isRussiaIndustrialBatch(pool: CargoUnit[], options: LoadingPlanOptions) {
+  if (!isRussiaDestination(options) || isUzbekistanDestination(options) || pool.length < activeLoadingRules.russiaIndustrialMinItems || pool.some(hasSlashSeries)) {
+    return false;
+  }
+  const wideMedium = pool.filter(
+    (item) =>
+      item.widthCm >= activeLoadingRules.russiaIndustrialWideWidthMm &&
+      item.widthCm <= 3_300 &&
+      item.heightCm <= activeLoadingRules.russiaIndustrialWideHeightMm &&
+      item.weightKg <= activeLoadingRules.flatbedWeightLimitKg,
+  );
+  const smallDense = pool.filter((item) => item.lengthCm <= 6_500 && item.widthCm <= 2_500 && item.heightCm <= 2_300 && item.weightKg >= 1_000);
+  return wideMedium.length >= 1 && smallDense.length >= 4;
+}
+
+function canAddToRussiaIndustrialTarpBin(bin: CargoItem[], cargo: CargoItem, maxWeightKg: number) {
+  const next = [...bin, cargo];
+  return (
+    cargo.widthCm <= activeLoadingRules.russiaTarpPreferredMaxWidthMm &&
+    cargo.heightCm <= activeLoadingRules.russiaTarpPreferredMaxHeightMm &&
+    sumWeight(next) <= maxWeightKg &&
+    floorPlanLengthMm(next, 2_400) <= 13_600
+  );
+}
+
+function isRussiaHighWideCargo(cargo: CargoItem) {
+  return cargo.widthCm >= activeLoadingRules.russiaHighWideFlatbedWidthMm || cargo.heightCm >= activeLoadingRules.russiaHighWideFlatbedHeightMm;
+}
+
+function isRussiaTarpPreferredCargo(cargo: CargoItem) {
+  return cargo.widthCm <= activeLoadingRules.russiaTarpPreferredMaxWidthMm && cargo.heightCm <= activeLoadingRules.russiaTarpPreferredMaxHeightMm;
+}
+
+function likelySideBySideWidthMm(items: CargoItem[]) {
+  const sameHeightBand = [...items]
+    .filter((item) => item.widthCm <= activeLoadingRules.russiaTarpPreferredMaxWidthMm && item.heightCm <= activeLoadingRules.russiaTarpPreferredMaxHeightMm)
+    .sort((a, b) => b.widthCm - a.widthCm || b.weightKg - a.weightKg)
+    .slice(0, 2);
+  return sameHeightBand.reduce((sum, item) => sum + item.widthCm, 0);
+}
+
+function buildRussiaIndustrialBatchBins(pool: CargoUnit[], vehicles: LoadingVehicle[], options: LoadingPlanOptions) {
+  if (!isRussiaIndustrialBatch(pool, options)) {
+    return { bins: [] as WorkBin[], rest: pool };
+  }
+
+  const bins: WorkBin[] = [];
+  let rest = [...pool];
+  const addBin = (vehicle: LoadingVehicle, method: string, items: CargoUnit[], warnings: string[]) => {
+    if (!items.length) return;
+    bins.push({ vehicle, method, items, warnings });
+    rest = removeFromPool(rest, items);
+  };
+
+  const wideGroup: CargoUnit[] = [];
+  for (const item of rest
+    .filter((candidate) => isRussiaHighWideCargo(candidate) && candidate.widthCm <= 3_700 && candidate.heightCm <= 3_500)
+    .sort((a, b) => b.heightCm - a.heightCm || b.widthCm - a.widthCm || b.weightKg - a.weightKg)) {
+    const next = [...wideGroup, item];
+    if (sumWeight(next) > activeLoadingRules.flatbedWeightLimitKg || next.reduce((sum, cargo) => sum + placementLengthMm(cargo), 0) > 17_000) continue;
+    wideGroup.push(item);
+  }
+  if (wideGroup.length) {
+    const vehicle = chooseAxleFlatbed(vehicles, sumWeight(wideGroup), 6);
+    if (vehicle) {
+      addBin(vehicle, '俄罗斯17米6轴平板宽高件办超限证', wideGroup, [
+        '俄罗斯线路宽 3100mm+ 或高 3200mm+ 的高宽组合，优先 17米6轴/7轴平板办理超宽/超高许可，避免误进篷布。',
+      ]);
+    }
+  }
+
+  const buildTarpGroup = (preferred: (item: CargoUnit) => boolean, method: string) => {
+    const group: CargoUnit[] = [];
+    for (const item of rest.filter(preferred).sort((a, b) => b.weightKg - a.weightKg || b.lengthCm - a.lengthCm)) {
+      if (!canAddToRussiaIndustrialTarpBin(group, item, activeLoadingRules.russiaIndustrialTarpMaxWeightKg)) continue;
+      group.push(item);
+    }
+    if (!group.length) return;
+    const vehicle = chooseAxleTarp(vehicles, sumWeight(group), 6);
+    if (vehicle) {
+      const sideBySideWidth = likelySideBySideWidthMm(group);
+      addBin(vehicle, method, group, [
+        '俄罗斯线路：宽 2400mm 左右、高 2500mm 内的中小件优先 5/6轴篷布，按内宽、内高、载重和装卸顺序复核。',
+        sideBySideWidth > activeLoadingRules.russiaTarpSideBySideReviewWidthMm
+          ? `篷布并排估算宽度 ${sideBySideWidth}mm 超过 ${activeLoadingRules.russiaTarpSideBySideReviewWidthMm}mm，需改平板或人工确认并排方式。`
+          : '',
+      ].filter(Boolean));
+    }
+  };
+
+  buildTarpGroup(
+    (item) =>
+      item.lengthCm >= 2_000 &&
+      isRussiaTarpPreferredCargo(item) &&
+      item.heightCm >= 1_500 &&
+      item.heightCm <= activeLoadingRules.russiaTarpPreferredMaxHeightMm,
+    '俄罗斯6轴篷布中等件合装',
+  );
+  buildTarpGroup(() => true, '俄罗斯6轴篷布窄小重货收尾');
+
+  return { bins, rest };
+}
+
+function isRussiaLongCargoBatch(pool: CargoUnit[], options: LoadingPlanOptions) {
+  if (!isRussiaDestination(options) || isUzbekistanDestination(options) || pool.some(hasSlashSeries)) {
+    return false;
+  }
+  const longCargo = pool.filter((item) => item.lengthCm >= activeLoadingRules.russiaLongCargoMinLengthMm && item.widthCm <= 1_200);
+  return longCargo.length >= 4;
+}
+
+function longCargoBucket(lengthMm: number) {
+  return Math.round(lengthMm / 1000) * 1000;
+}
+
+function canAddToRussiaLongCargoBin(bin: CargoItem[], cargo: CargoItem) {
+  const next = [...bin, cargo];
+  return (
+    next.reduce((sum, item) => sum + item.widthCm, 0) <= activeLoadingRules.russiaLongCargoTargetWidthMm &&
+    sumWeight(next) <= activeLoadingRules.russiaLongCargoMaxGroupWeightKg
+  );
+}
+
+function buildRussiaLongCargoBins(pool: CargoUnit[], vehicles: LoadingVehicle[], options: LoadingPlanOptions) {
+  if (!isRussiaLongCargoBatch(pool, options)) {
+    return { bins: [] as WorkBin[], rest: pool };
+  }
+
+  const bins: WorkBin[] = [];
+  let rest = [...pool];
+  const oversizeVehicles = vehicles.filter(isOversizeVehicle);
+  const longCargo = rest
+    .filter((item) => item.lengthCm >= activeLoadingRules.russiaLongCargoMinLengthMm && item.widthCm <= 1_200)
+    .sort((a, b) => longCargoBucket(b.lengthCm) - longCargoBucket(a.lengthCm) || b.weightKg - a.weightKg || b.widthCm - a.widthCm);
+
+  const buckets = new Map<number, CargoUnit[]>();
+  for (const item of longCargo) {
+    const bucket = longCargoBucket(item.lengthCm);
+    buckets.set(bucket, [...(buckets.get(bucket) ?? []), item]);
+  }
+
+  for (const [, bucketItems] of [...buckets.entries()].sort((a, b) => b[0] - a[0])) {
+    let candidates = [...bucketItems].sort((a, b) => b.weightKg - a.weightKg || b.widthCm - a.widthCm);
+    while (candidates.length) {
+      const group: CargoUnit[] = [];
+      for (const item of [...candidates]) {
+        if (!canAddToRussiaLongCargoBin(group, item)) continue;
+        group.push(item);
+        candidates = candidates.filter((candidate) => candidate.unitId !== item.unitId);
+      }
+      if (!group.length) break;
+      const width = group.reduce((sum, item) => sum + item.widthCm, 0);
+      const height = group.reduce((max, item) => Math.max(max, item.heightCm), 0);
+      const weight = sumWeight(group);
+      const vehicle = chooseAutomotiveOversize(oversizeVehicles.length ? oversizeVehicles : vehicles, weight, width, height);
+      if (!vehicle) {
+        break;
+      }
+      bins.push({
+        vehicle,
+        method: '俄罗斯长货超限车同长度段合装',
+        items: group,
+        warnings: [
+          `俄罗斯长货特例：${Math.round(maxLength(group) / 1000)}米级长货按同长度段合装，累计宽度 ${width}mm，总重 ${weight.toFixed(2)}kg。`,
+          weight > activeLoadingRules.multiCargoHardSplitWeightKg
+            ? '本车多件合装超过 44 吨，仅适用于不经过乌兹别克的俄罗斯线路，需复核轴荷、超限许可和绑扎。'
+            : '按俄罗斯超限路线复核累计宽度、前后悬和绑扎。',
+        ],
+      });
+    }
+  }
+
+  const used = bins.flatMap((bin) => bin.items);
+  rest = removeFromPool(rest, used);
+  return { bins, rest };
+}
+
 function chooseOversizeVehicle(vehicles: LoadingVehicle[], items: CargoItem[]) {
   const text = items.map((item) => `${item.name} ${item.remark ?? ''}`).join(' ');
   const width = maxWidth(items);
@@ -523,7 +1150,12 @@ function chooseOversizeVehicle(vehicles: LoadingVehicle[], items: CargoItem[]) {
 
 function canAddToOversizeBin(bin: CargoItem[], cargo: CargoItem, maxItems = 4) {
   const next = [...bin, cargo];
-  return sumWeight(next) <= activeLoadingRules.indivisibleSingleVehicleKg && sumVolume(next) <= 240 && next.length <= maxItems;
+  return (
+    (next.length <= 1 || sumWeight(next) < activeLoadingRules.multiCargoHardSplitWeightKg) &&
+    sumWeight(next) <= activeLoadingRules.indivisibleSingleVehicleKg &&
+    sumVolume(next) <= 240 &&
+    next.length <= maxItems
+  );
 }
 
 function removeFromPool(pool: CargoUnit[], selected: CargoUnit[]) {
@@ -966,7 +1598,23 @@ function binToResult(bin: WorkBin): LoadingVehicleResult {
     warnings.push(`平板车重量超过 ${activeLoadingRules.flatbedWeightLimitKg}kg，不允许承运`);
   }
   if (assignments.length > 1 && usedWeightKg > activeLoadingRules.indivisibleSingleVehicleKg) {
-    warnings.push(`多件合装总重超过 ${activeLoadingRules.indivisibleSingleVehicleKg}kg，不符合中亚 44 吨规则`);
+    warnings.push(`多件合装总重超过 ${activeLoadingRules.indivisibleSingleVehicleKg}kg；乌兹别克线路不允许，俄罗斯等其他线路按当地规则、轴荷和证件人工复核。`);
+  }
+  if (assignments.length > 1 && usedWeightKg >= activeLoadingRules.multiCargoRiskSplitWeightKg) {
+    warnings.push(`多件合装总重达到 ${activeLoadingRules.multiCargoRiskSplitWeightKg}kg 以上，接近 44 吨红线，建议拆车或人工确认过磅误差。`);
+  }
+  if (isTarpVehicle(bin.vehicle)) {
+    const maxCargoWidth = Math.max(...assignments.map((assignment) => Number(assignment.widthCm ?? 0)), 0);
+    const maxCargoHeight = Math.max(...assignments.map((assignment) => Number(assignment.heightCm ?? 0)), 0);
+    const sideBySideWidth = likelySideBySideWidthMm(bin.items);
+    if (maxCargoWidth > activeLoadingRules.russiaTarpPreferredMaxWidthMm || maxCargoHeight > activeLoadingRules.russiaTarpPreferredMaxHeightMm) {
+      warnings.push(
+        `篷布车宽高超过优选范围：单件最大 ${maxCargoWidth}mm x ${maxCargoHeight}mm，需复核篷布车内宽、内高和是否改平板。`,
+      );
+    }
+    if (sideBySideWidth > activeLoadingRules.russiaTarpSideBySideReviewWidthMm) {
+      warnings.push(`篷布并排估算宽度 ${sideBySideWidth}mm 超过 ${activeLoadingRules.russiaTarpSideBySideReviewWidthMm}mm，需改平板或人工确认并排方式。`);
+    }
   }
   if (payloadLimit && usedWeightKg / payloadLimit > 0.95) {
     warnings.push('载重利用率超过 95%，需复核称重误差');
@@ -1066,12 +1714,28 @@ export function generateLoadingPlan(
   activeLoadingRules = resolveLoadingRules(options.loadingRules);
   try {
     const units = expandCargo(cargoItems);
-    const projectBatch = buildProjectBatchBins(units, selectedVehicles);
+    const automotiveBatch = buildAutomotiveBatchBins(units, selectedVehicles);
+    const mixedLongProject = buildMixedLongOversizeProjectBins(automotiveBatch.rest, selectedVehicles, options);
+    const russiaLongCargoBatch = buildRussiaLongCargoBins(mixedLongProject.rest, selectedVehicles, options);
+    const russiaIndustrialBatch = buildRussiaIndustrialBatchBins(russiaLongCargoBatch.rest, selectedVehicles, options);
+    const russiaCostBatch = buildRussiaCostOptimizedBins(russiaIndustrialBatch.rest, selectedVehicles, options);
+    const projectBatch = buildProjectBatchBins(russiaCostBatch.rest, selectedVehicles);
     const oversize = buildOversizeBins(projectBatch.rest, selectedVehicles);
     const flatbed = buildFlatbedConsolidationBins(oversize.rest, selectedVehicles);
     const tarp = buildTarpBins(flatbed.rest, selectedVehicles);
     const fallback = buildFallbackBins(tarp.rest, selectedVehicles);
-    const bins = [...projectBatch.bins, ...oversize.bins, ...flatbed.bins, ...tarp.bins, ...fallback.bins];
+    const bins = [
+      ...automotiveBatch.bins,
+      ...mixedLongProject.bins,
+      ...russiaLongCargoBatch.bins,
+      ...russiaIndustrialBatch.bins,
+      ...russiaCostBatch.bins,
+      ...projectBatch.bins,
+      ...oversize.bins,
+      ...flatbed.bins,
+      ...tarp.bins,
+      ...fallback.bins,
+    ];
     const vehicles = applyDestinationRules(bins.map(binToResult), options);
     const assignedIds = new Set(bins.flatMap((bin) => bin.items.map((item) => item.unitId)));
     const unassigned = units
@@ -1102,7 +1766,14 @@ export function generateLoadingPlan(
       },
       notes: [
         `当前规则：项目批量货物优先按 17米5轴平板矩阵摆放；不可摆放表示不能被压，不影响同车并排；空白要求默认允许叠放；除非单件且不可拆分，否则单车总重不能超过 ${activeLoadingRules.indivisibleSingleVehicleKg}kg；单件超过 ${activeLoadingRules.indivisibleSingleVehicleKg}kg 的不可拆分货物必须单独一车。`,
+        `多件合装重量规则：总重 ${activeLoadingRules.multiCargoRiskSplitWeightKg}kg 以上提示高风险，总重达到 ${activeLoadingRules.multiCargoHardSplitWeightKg}kg 时不再自动合车，优先拆车。`,
+        '汽车大批量件规则：按同事方案沉淀，先按宽高等级分组；超宽件线性排布，普通件按面积折算长度，目标控制 17 米左右车组和整票总成本。',
+        '混合长件/超限项目规则：20 米以上超长件单独走超限；10 米左右长件优先带 3-4 米短宽件；低矮小件可进入超限车集中合装；乌兹别克线路禁止多件合装超过 44 吨，俄罗斯等其他线路按当地规则人工复核。',
+        '俄罗斯工业件规则：宽 3000-3200mm、高约 3250mm 且重量可控时，优先 17米6轴平板办理超限证；窄小重货优先 6轴篷布集中。',
+        '俄罗斯篷布边界规则：宽 2400mm 左右、高 2500mm 内优先篷布；宽 3100mm+ 或高 3200mm+ 优先平板；篷布并排估算宽度超过 3300mm 必须改平板或人工复核。',
+        '俄罗斯长货批量规则：不经过乌兹别克时，24 米以上窄长货按同长度段、累计宽度约 3000mm 合装超限车；超过 44 吨时强制提示人工复核。',
         '本次升级：装载方案按整票总体成本评估，不按单台车成本贪心选择；中等大件优先尝试 17米6轴平板并车减少总车辆数，剩余小件再用篷布车收尾。',
+        isRussiaDestination(options) ? '俄罗斯成本规则：先拆出宽货/高货/长货平板处理，其余优先低成本篷布车；宽度 2500mm 以上和高度 3300mm 以上自动标记复核超限费或车货总高。' : '',
         (options.destinationCountries ?? [options.destinationCountry]).some((country) => country === '俄罗斯') ? `国家规则：俄罗斯车辆+货物总高不得超过 ${(activeLoadingRules.russiaMaxVehicleCargoHeightMm / 1000).toFixed(1)} 米；车型有效高度建议按“总高上限-车辆空载高度/板高”维护，用于系统自动校验。` : '',
       ].filter(Boolean),
     };

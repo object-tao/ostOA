@@ -1,7 +1,7 @@
 import { Button, Card, Checkbox, Drawer, Form, Input, Modal, Select, Space, Switch, Table, Tabs, Tag, Typography, message } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useEffect, useMemo, useState } from 'react';
-import { DeleteOutlined, EditOutlined, PlusOutlined } from '@ant-design/icons';
+import { DeleteOutlined, EditOutlined, PlusOutlined, SyncOutlined } from '@ant-design/icons';
 import { apiRequest } from '../api/client';
 
 const { Text } = Typography;
@@ -36,6 +36,8 @@ type ManagedEmployee = {
   isSalesperson: boolean;
   status: string;
   notes?: string | null;
+  feishuOpenId?: string | null;
+  feishuUserId?: string | null;
   roles?: { id: string; name: string; code: string }[];
   roleIds?: string[];
 };
@@ -57,6 +59,8 @@ type EmployeeFormValues = {
   isSalesperson?: boolean;
   status?: string;
   notes?: string;
+  feishuOpenId?: string;
+  feishuUserId?: string;
   roleIds?: string[];
 };
 
@@ -133,6 +137,8 @@ export function PermissionManagementPage() {
             isSalesperson: employee.isSalesperson,
             status: employee.status,
             notes: employee.notes ?? '',
+            feishuOpenId: employee.feishuOpenId ?? '',
+            feishuUserId: employee.feishuUserId ?? '',
             roleIds: employee.roleIds ?? employee.roles?.map((role) => role.id) ?? [],
           }
         : { status: 'ACTIVE', isSalesperson: false, roleIds: [] },
@@ -224,19 +230,33 @@ export function PermissionManagementPage() {
     });
   };
 
+  const syncFeishuAccounts = async () => {
+    setLoading(true);
+    try {
+      const result = await apiRequest<{ total: number; matched: number; unmatched: number }>('/api/employees/sync-feishu', { method: 'POST' });
+      message.success(`飞书账号同步完成：匹配 ${result.matched}/${result.total} 人，未匹配 ${result.unmatched} 人`);
+      await load();
+    } catch (error) {
+      message.error((error as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const employeeColumns: ColumnsType<ManagedEmployee> = [
     { title: '姓名', dataIndex: 'name', width: 140 },
     { title: '部门', render: (_, row) => row.department || '-', width: 140 },
     { title: '岗位', render: (_, row) => row.position || '-', width: 140 },
     { title: '电话', render: (_, row) => row.phone || '-', width: 140 },
     { title: '邮箱', render: (_, row) => row.email || '-', width: 190 },
+    { title: '飞书', render: (_, row) => (row.feishuOpenId ? <Tag color="green">已绑定</Tag> : <Tag>未绑定</Tag>), width: 100 },
     { title: '业务员', render: (_, row) => (row.isSalesperson ? <Tag color="blue">是</Tag> : <Tag>否</Tag>), width: 90 },
     { title: '角色', render: (_, row) => (row.roles?.length ? row.roles.map((role) => <Tag key={role.id}>{role.name}</Tag>) : '-'), width: 220 },
     { title: '状态', render: (_, row) => <Tag color={row.status === 'ACTIVE' ? 'green' : 'default'}>{row.status === 'ACTIVE' ? '启用' : '停用'}</Tag>, width: 90 },
     {
       title: '操作',
       fixed: 'right',
-      width: 170,
+      width: 190,
       render: (_, row) => (
         <Space>
           <Button type="link" icon={<EditOutlined />} onClick={() => openEmployeeDrawer(row)}>
@@ -298,10 +318,15 @@ export function PermissionManagementPage() {
               label: '员工管理',
               children: (
                 <Space direction="vertical" size={16} style={{ width: '100%' }}>
-                  <Button type="primary" icon={<PlusOutlined />} onClick={() => openEmployeeDrawer()}>
-                    新增员工
-                  </Button>
-                  <Table rowKey="id" loading={loading} dataSource={employees} columns={employeeColumns} scroll={{ x: 1280 }} pagination={{ pageSize: 10 }} />
+                  <Space wrap>
+                    <Button type="primary" icon={<PlusOutlined />} onClick={() => openEmployeeDrawer()}>
+                      新增员工
+                    </Button>
+                    <Button icon={<SyncOutlined />} onClick={syncFeishuAccounts} loading={loading}>
+                      同步飞书账号
+                    </Button>
+                  </Space>
+                  <Table rowKey="id" loading={loading} dataSource={employees} columns={employeeColumns} scroll={{ x: 1480 }} pagination={{ pageSize: 10 }} />
                 </Space>
               ),
             },
@@ -356,6 +381,14 @@ export function PermissionManagementPage() {
             </Form.Item>
             <Form.Item name="status" label="状态" initialValue="ACTIVE" style={{ flex: 1 }}>
               <Select options={[{ value: 'ACTIVE', label: '启用' }, { value: 'INACTIVE', label: '停用' }]} />
+            </Form.Item>
+          </Space>
+          <Space size={12} style={{ width: '100%' }}>
+            <Form.Item name="feishuOpenId" label="Feishu Open ID" style={{ flex: 1 }}>
+              <Input placeholder="同步后自动写入，也可手动维护" />
+            </Form.Item>
+            <Form.Item name="feishuUserId" label="Feishu User ID" style={{ flex: 1 }}>
+              <Input placeholder="同步后自动写入，也可手动维护" />
             </Form.Item>
           </Space>
           <Form.Item name="notes" label="备注">
@@ -430,5 +463,14 @@ export function EmployeeRoleSelect({
       .catch(() => setRoles([]));
   }, [providedRoles]);
 
-  return <Select mode="multiple" allowClear value={value} onChange={onChange} options={roles.map((role) => ({ value: role.id, label: role.name }))} placeholder="选择角色" />;
+  return (
+    <Select
+      mode="multiple"
+      allowClear
+      value={value}
+      onChange={onChange}
+      options={roles.filter((role) => role.enabled).map((role) => ({ value: role.id, label: `${role.name} / ${role.code}` }))}
+      placeholder="请选择员工角色"
+    />
+  );
 }

@@ -37,6 +37,10 @@ type Env = {
   MARKET_IMPORT_TOKEN?: string;
   GOOGLE_MAPS_API_KEY?: string;
   TELEGRAM_BOT_TOKEN?: string;
+  FEISHU_APP_ID?: string;
+  FEISHU_APP_SECRET?: string;
+  FEISHU_REDIRECT_URI?: string;
+  FEISHU_OAUTH_SCOPE?: string;
 };
 
 type SessionUser = {
@@ -52,6 +56,11 @@ type SessionUser = {
 type LoginRequest = {
   email?: string;
   password?: string;
+};
+
+type FeishuLoginRequest = {
+  code?: string;
+  redirectUri?: string;
 };
 
 type LoadingAiConfigPayload = {
@@ -114,6 +123,7 @@ type SupplierPayload = {
   name?: string;
   supplierCode?: string;
   type?: string;
+  types?: string[];
   contactInfo?: string;
   payee?: string;
   bankPhone?: string;
@@ -407,6 +417,8 @@ type EmployeePayload = {
   isSalesperson?: boolean;
   status?: string;
   notes?: string;
+  feishuOpenId?: string;
+  feishuUserId?: string;
 };
 
 type RbacRolePayload = {
@@ -432,6 +444,19 @@ type VehicleTypePayload = {
   payloadWeight?: number | string | null;
   priceSort?: number | string | null;
   scenario?: string;
+};
+
+type LoadingRulePayload = {
+  ruleCode?: string;
+  ruleName?: string;
+  category?: string;
+  valueType?: string;
+  ruleValue?: string;
+  unit?: string;
+  enabled?: boolean | number | string;
+  description?: string;
+  sortOrder?: number | string | null;
+  applicableCountries?: string[];
 };
 
 type TransportInquiryPayload = {
@@ -508,7 +533,7 @@ function json(data: unknown, init: ResponseInit = {}, corsOrigin = '*') {
   const headers = new Headers(init.headers);
   headers.set('content-type', 'application/json; charset=utf-8');
   headers.set('access-control-allow-origin', corsOrigin);
-  headers.set('access-control-allow-methods', 'GET,POST,PATCH,DELETE,OPTIONS');
+  headers.set('access-control-allow-methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
   headers.set('access-control-allow-headers', 'content-type,authorization,x-market-token');
 
   return new Response(JSON.stringify(data), {
@@ -571,6 +596,23 @@ function createId(prefix: string) {
 
 function isoNow() {
   return new Date().toISOString();
+}
+
+function formatBeijing(value?: string | null) {
+  if (!value) return '';
+  const parsed = new Date(value.includes('T') ? value : value.replace(' ', 'T'));
+  if (!Number.isFinite(parsed.getTime())) return value.replace('T', ' ').replace(/Z$/, '').slice(0, 16);
+  const parts = new Intl.DateTimeFormat('zh-CN', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).formatToParts(parsed);
+  const get = (type: Intl.DateTimeFormatPartTypes) => parts.find((part) => part.type === type)?.value ?? '';
+  return `${get('year')}-${get('month')}-${get('day')} ${get('hour')}:${get('minute')}`;
 }
 
 function slugFileName(fileName: string) {
@@ -829,6 +871,12 @@ function isAdminUser(user: Pick<SessionUser, 'roleCode' | 'permissions'> | null 
 }
 
 async function seedRbac(env: Env) {
+  const permissionCount = await env.DB.prepare('SELECT COUNT(*) as count FROM rbac_permissions').first<{ count: number }>();
+  const roleCount = await env.DB.prepare('SELECT COUNT(*) as count FROM rbac_roles').first<{ count: number }>();
+  if (Number(permissionCount?.count ?? 0) >= defaultPermissions.length && Number(roleCount?.count ?? 0) >= defaultRoles.length) {
+    return;
+  }
+
   const now = isoNow();
   for (const [code, name, module, action] of defaultPermissions) {
     await env.DB.prepare(
@@ -905,6 +953,339 @@ async function getUserRbac(env: Env, user: { id: string; email: string; roleCode
     .bind(...roles.map((role) => role.id))
     .all<{ code: string }>();
   return { roles: roles.map((role) => role.name), permissions: permissions.results.map((item) => item.code) };
+}
+
+function getFeishuRedirectUri(env: Env, provided?: string) {
+  return ensureString(provided) || ensureString(env.FEISHU_REDIRECT_URI) || 'https://admin.ostoa.org/mobile/workflow';
+}
+
+function getFeishuAuthUrl(env: Env, redirectUri: string, state?: string) {
+  const appId = ensureString(env.FEISHU_APP_ID);
+  if (!appId) return { error: 'Feishu App ID is not configured.' };
+  const authUrl = new URL('https://accounts.feishu.cn/open-apis/authen/v1/authorize');
+  authUrl.searchParams.set('client_id', appId);
+  authUrl.searchParams.set('response_type', 'code');
+  authUrl.searchParams.set('redirect_uri', redirectUri);
+  const scope = ensureString(env.FEISHU_OAUTH_SCOPE);
+  if (scope) authUrl.searchParams.set('scope', scope);
+  if (state) authUrl.searchParams.set('state', state);
+  return { authUrl: authUrl.toString() };
+}
+
+async function exchangeFeishuCode(env: Env, code: string, redirectUri: string) {
+  const appId = ensureString(env.FEISHU_APP_ID);
+  const appSecret = ensureString(env.FEISHU_APP_SECRET);
+  if (!appId || !appSecret) return { error: 'Feishu App ID or App Secret is not configured.' };
+  const legacyResult = await exchangeFeishuCodeLegacy(env, code);
+  if (legacyResult.accessToken || legacyResult.error) return legacyResult;
+
+  const response = await fetch('https://open.feishu.cn/open-apis/authen/v2/oauth/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json; charset=utf-8' },
+    body: JSON.stringify({
+      grant_type: 'authorization_code',
+      client_id: appId,
+      client_secret: appSecret,
+      code,
+      redirect_uri: redirectUri,
+    }),
+  });
+  const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+  if (!response.ok || Number(payload.code ?? 0) !== 0) {
+    return { error: ensureString(payload.msg) || ensureString(payload.message) || 'Feishu authorization failed.' };
+  }
+  const data = (payload.data ?? {}) as Record<string, unknown>;
+  const tokenInfo = (data.user_access_token_info ?? data.token_info ?? {}) as Record<string, unknown>;
+  const accessToken =
+    ensureString(data.access_token) ||
+    ensureString(data.user_access_token) ||
+    ensureString(tokenInfo.access_token) ||
+    ensureString(tokenInfo.user_access_token) ||
+    ensureString(payload.access_token) ||
+    ensureString(payload.user_access_token);
+  if (accessToken) return { accessToken };
+  return { error: `Feishu did not return user_access_token. Response fields: ${Object.keys(data).join(', ') || 'empty'}` };
+}
+
+async function getFeishuAppAccessToken(env: Env) {
+  const appId = ensureString(env.FEISHU_APP_ID);
+  const appSecret = ensureString(env.FEISHU_APP_SECRET);
+  if (!appId || !appSecret) return { error: 'Feishu App ID or App Secret is not configured.' };
+  const response = await fetch('https://open.feishu.cn/open-apis/auth/v3/app_access_token/internal', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json; charset=utf-8' },
+    body: JSON.stringify({ app_id: appId, app_secret: appSecret }),
+  });
+  const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+  if (!response.ok || Number(payload.code ?? 0) !== 0) {
+    return { error: ensureString(payload.msg) || ensureString(payload.message) || 'Failed to get Feishu app_access_token.' };
+  }
+  return { appAccessToken: ensureString(payload.app_access_token) };
+}
+
+async function exchangeFeishuCodeLegacy(env: Env, code: string) {
+  const tokenResult = await getFeishuAppAccessToken(env);
+  if (tokenResult.error || !tokenResult.appAccessToken) return tokenResult.error ? { error: tokenResult.error } : {};
+  const response = await fetch('https://open.feishu.cn/open-apis/authen/v1/access_token', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${tokenResult.appAccessToken}`,
+      'Content-Type': 'application/json; charset=utf-8',
+    },
+    body: JSON.stringify({ grant_type: 'authorization_code', code }),
+  });
+  const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+  if (!response.ok || Number(payload.code ?? 0) !== 0) {
+    return { error: ensureString(payload.msg) || ensureString(payload.message) || 'Feishu legacy authorization failed.' };
+  }
+  const data = (payload.data ?? {}) as Record<string, unknown>;
+  return { accessToken: ensureString(data.access_token) || ensureString(data.user_access_token) };
+}
+
+async function getFeishuUserInfo(accessToken: string) {
+  const response = await fetch('https://open.feishu.cn/open-apis/authen/v1/user_info', {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+  if (!response.ok || Number(payload.code ?? 0) !== 0) {
+    return { error: ensureString(payload.msg) || ensureString(payload.message) || 'Failed to get Feishu user info.' };
+  }
+  return { user: ((payload.data ?? {}) as Record<string, unknown>) };
+}
+
+async function getFeishuTenantAccessToken(env: Env) {
+  const appId = ensureString(env.FEISHU_APP_ID);
+  const appSecret = ensureString(env.FEISHU_APP_SECRET);
+  if (!appId || !appSecret) return { error: 'Feishu App ID or App Secret is not configured.' };
+  const response = await fetch('https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json; charset=utf-8' },
+    body: JSON.stringify({ app_id: appId, app_secret: appSecret }),
+  });
+  const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+  if (!response.ok || Number(payload.code ?? 0) !== 0) {
+    return { error: ensureString(payload.msg) || ensureString(payload.message) || 'Failed to get Feishu tenant_access_token.' };
+  }
+  return { tenantAccessToken: ensureString(payload.tenant_access_token) };
+}
+
+async function getFeishuIdsByContacts(env: Env, contacts: { emails: string[]; mobiles: string[] }) {
+  const tokenResult = await getFeishuTenantAccessToken(env);
+  if (tokenResult.error) return tokenResult;
+  const response = await fetch('https://open.feishu.cn/open-apis/contact/v3/users/batch_get_id?user_id_type=open_id', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${tokenResult.tenantAccessToken}`,
+      'Content-Type': 'application/json; charset=utf-8',
+    },
+    body: JSON.stringify({
+      emails: contacts.emails,
+      mobiles: contacts.mobiles,
+      include_resigned: false,
+    }),
+  });
+  const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+  if (!response.ok || Number(payload.code ?? 0) !== 0) {
+    return { error: ensureString(payload.msg) || ensureString(payload.message) || 'Failed to sync Feishu users.' };
+  }
+  const data = (payload.data ?? {}) as Record<string, unknown>;
+  return { users: Array.isArray(data.user_list) ? (data.user_list as Record<string, unknown>[]) : [] };
+}
+
+async function syncEmployeeFeishuAccounts(env: Env) {
+  const employees = await env.DB.prepare(
+    `SELECT id, name, phone, email FROM employees WHERE status = 'ACTIVE' AND (COALESCE(email, '') != '' OR COALESCE(phone, '') != '') ORDER BY name ASC`,
+  ).all<{ id: string; name: string; phone?: string | null; email?: string | null }>();
+  const emailMap = new Map<string, string>();
+  const mobileMap = new Map<string, string>();
+  for (const employee of employees.results) {
+    const email = ensureString(employee.email).toLowerCase();
+    const mobile = ensureString(employee.phone).replace(/\s+/g, '');
+    if (email) emailMap.set(email, employee.id);
+    if (mobile) mobileMap.set(mobile, employee.id);
+  }
+  const result = await getFeishuIdsByContacts(env, {
+    emails: [...emailMap.keys()],
+    mobiles: [...mobileMap.keys()],
+  });
+  if ('error' in result && result.error) return result;
+
+  let matched = 0;
+  const unmatched = employees.results.map((item) => item.id);
+  const feishuUsers = 'users' in result ? result.users : [];
+  for (const item of feishuUsers) {
+    const email = ensureString(item.email).toLowerCase();
+    const mobile = ensureString(item.mobile).replace(/\s+/g, '');
+    const employeeId = (email && emailMap.get(email)) || (mobile && mobileMap.get(mobile));
+    if (!employeeId) continue;
+    const returnedUserId = ensureString(item.user_id) || ensureString(item.userId);
+    const openId = ensureString(item.open_id) || ensureString(item.openId) || returnedUserId;
+    const userId = returnedUserId;
+    if (!openId && !userId) continue;
+    await env.DB.prepare('UPDATE employees SET feishu_open_id = COALESCE(NULLIF(?, \'\'), feishu_open_id), feishu_user_id = COALESCE(NULLIF(?, \'\'), feishu_user_id), updated_at = ? WHERE id = ?')
+      .bind(openId, userId, isoNow(), employeeId)
+      .run();
+    matched += 1;
+    const index = unmatched.indexOf(employeeId);
+    if (index >= 0) unmatched.splice(index, 1);
+  }
+  await recordActivity(env, '同步飞书账号', `同步飞书账号，匹配 ${matched} 个员工。`);
+  return { ok: true, total: employees.results.length, matched, unmatched: unmatched.length };
+}
+
+function feishuCardContent(todo: {
+  title: string;
+  customerName?: string | null;
+  projectName?: string | null;
+  taskNo?: string | null;
+  nodeName?: string | null;
+  dueAt?: string | null;
+  taskId?: string | null;
+  feishuAppId?: string | null;
+}) {
+  const pagePath = `/mobile/workflow${todo.taskId ? `?taskId=${encodeURIComponent(todo.taskId)}` : ''}`;
+  const targetUrl = `https://admin.ostoa.org${pagePath}`;
+  const url = todo.feishuAppId
+    ? `https://applink.feishu.cn/client/web_app/open?appId=${encodeURIComponent(todo.feishuAppId)}&mode=appCenter&lk_target_url=${encodeURIComponent(targetUrl)}`
+    : targetUrl;
+  return {
+    config: { wide_screen_mode: true },
+    header: {
+      title: { tag: 'plain_text', content: todo.title || '运输任务待处理' },
+      template: 'blue',
+    },
+    elements: [
+      { tag: 'markdown', content: `**客户**：${todo.customerName || '-'}\n**项目**：${todo.projectName || '-'}\n**任务号**：${todo.taskNo || '-'}\n**当前节点**：${todo.nodeName || '-'}\n**截止时间**：${todo.dueAt ? formatBeijing(todo.dueAt) : '-'}` },
+      { tag: 'action', actions: [{ tag: 'button', text: { tag: 'plain_text', content: '打开处理' }, type: 'primary', url }] },
+    ],
+  };
+}
+
+async function sendFeishuMessage(env: Env, openId: string, card: Record<string, unknown>) {
+  const tokenResult = await getFeishuTenantAccessToken(env);
+  if (tokenResult.error) return tokenResult;
+  const response = await fetch('https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=open_id', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${tokenResult.tenantAccessToken}`,
+      'Content-Type': 'application/json; charset=utf-8',
+    },
+    body: JSON.stringify({
+      receive_id: openId,
+      msg_type: 'interactive',
+      content: JSON.stringify(card),
+    }),
+  });
+  const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+  if (!response.ok || Number(payload.code ?? 0) !== 0) {
+    const code = payload.code === undefined ? '' : `code ${String(payload.code)}`;
+    const message = ensureString(payload.msg) || ensureString(payload.message) || 'Failed to send Feishu message.';
+    return { error: [code, message].filter(Boolean).join(': ') };
+  }
+  return { ok: true };
+}
+
+async function findEmployeeForFeishu(env: Env, feishuUser: Record<string, unknown>) {
+  const email = ensureString(feishuUser.email) || ensureString(feishuUser.enterprise_email);
+  if (email) {
+    const employee = await env.DB.prepare(
+      `SELECT id, name, email, phone, department, position, is_salesperson as isSalesperson, status
+       FROM employees
+       WHERE lower(COALESCE(email, '')) = lower(?) AND status = 'ACTIVE'
+       LIMIT 1`,
+    )
+      .bind(email)
+      .first<Record<string, unknown>>();
+    if (employee) return employee;
+  }
+
+  const name = ensureString(feishuUser.name) || ensureString(feishuUser.en_name);
+  if (name) {
+    const rows = await env.DB.prepare(
+      `SELECT id, name, email, phone, department, position, is_salesperson as isSalesperson, status
+       FROM employees
+       WHERE name = ? AND status = 'ACTIVE'
+       LIMIT 2`,
+    )
+      .bind(name)
+      .all<Record<string, unknown>>();
+    if (rows.results.length === 1) return rows.results[0];
+  }
+  return null;
+}
+
+async function getOrCreateUserForEmployee(env: Env, employee: Record<string, unknown>) {
+  const email = ensureString(employee.email).toLowerCase();
+  if (!email) return { error: '员工缺少邮箱，无法使用飞书免登。' };
+  const existing = await env.DB.prepare('SELECT id, email, real_name as realName, role_code as roleCode, role_name as roleName FROM users WHERE lower(email) = lower(?)')
+    .bind(email)
+    .first<{ id: string; email: string; realName: string; roleCode: string; roleName: string }>();
+  if (existing) return { user: existing };
+
+  const isSalesperson = Boolean(employee.isSalesperson);
+  const user = {
+    id: createId('usr'),
+    email,
+    realName: ensureString(employee.name),
+    roleCode: isSalesperson ? 'SALES' : 'USER',
+    roleName: isSalesperson ? '业务员' : '员工',
+  };
+  await env.DB.prepare('INSERT INTO users (id, email, password_hash, real_name, role_code, role_name, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+    .bind(user.id, user.email, await sha256(createId('feishu_pwd')), user.realName, user.roleCode, user.roleName, isoNow())
+    .run();
+  return { user };
+}
+
+async function loginWithFeishu(env: Env, body: FeishuLoginRequest) {
+  const code = ensureString(body.code);
+  if (!code) return { error: 'Feishu authorization code is required.' };
+  const redirectUri = getFeishuRedirectUri(env, body.redirectUri);
+  const tokenResult = await exchangeFeishuCode(env, code, redirectUri);
+  if (tokenResult.error) return tokenResult;
+  if (!tokenResult.accessToken) return { error: 'Feishu did not return user_access_token.' };
+  const userInfoResult = await getFeishuUserInfo(tokenResult.accessToken);
+  if (userInfoResult.error) return userInfoResult;
+  const feishuUser = userInfoResult.user ?? {};
+  const employee = await findEmployeeForFeishu(env, feishuUser);
+  if (!employee) return { error: '未找到匹配员工。请确认飞书邮箱/姓名已维护到员工管理。' };
+  const systemUserResult = await getOrCreateUserForEmployee(env, employee);
+  if (systemUserResult.error || !systemUserResult.user) return systemUserResult;
+  const rbac = await getUserRbac(env, systemUserResult.user);
+  const sessionUser = {
+    ...systemUserResult.user,
+    roles: rbac.roles,
+    permissions: rbac.permissions,
+    roleName: rbac.roles.length ? rbac.roles.join('、') : systemUserResult.user.roleName,
+  };
+  const token = await createToken(sessionUser, env.AUTH_SECRET);
+  return {
+    token,
+    user: sessionUser,
+    employee,
+    feishuUser: {
+      openId: ensureString(feishuUser.open_id),
+      unionId: ensureString(feishuUser.union_id),
+      name: ensureString(feishuUser.name),
+      email: ensureString(feishuUser.email) || ensureString(feishuUser.enterprise_email),
+    },
+  };
+}
+
+async function listMobileWorkflowTodos(env: Env, sessionUser: SessionUser) {
+  const rows = await listWorkflowTodos(env);
+  if (isAdminUser(sessionUser)) return rows;
+  const roleNames = new Set([sessionUser.roleName, ...(sessionUser.roles ?? [])].filter(Boolean));
+  return rows.filter((row: Record<string, unknown>) => {
+    const owner = ensureString(row.owner);
+    const ownerRoleName = ensureString(row.ownerRoleName);
+    return (
+      !owner ||
+      owner === sessionUser.realName ||
+      owner === sessionUser.email ||
+      ownerRoleName === sessionUser.roleName ||
+      roleNames.has(ownerRoleName)
+    );
+  });
 }
 
 async function listRbacPermissions(env: Env) {
@@ -1095,6 +1476,8 @@ async function listEmployees(env: Env, salespeopleOnly = false) {
         is_salesperson as isSalesperson,
         status,
         notes,
+        feishu_open_id as feishuOpenId,
+        feishu_user_id as feishuUserId,
         created_at as createdAt,
         updated_at as updatedAt
       FROM employees
@@ -1130,8 +1513,8 @@ async function createEmployee(env: Env, body: EmployeePayload) {
   await env.DB.prepare(
     `
       INSERT INTO employees (
-        id, name, phone, email, department, position, is_salesperson, status, notes, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        id, name, phone, email, department, position, is_salesperson, status, notes, feishu_open_id, feishu_user_id, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `,
   )
     .bind(
@@ -1144,6 +1527,8 @@ async function createEmployee(env: Env, body: EmployeePayload) {
       body.isSalesperson ? 1 : 0,
       ensureString(body.status) || 'ACTIVE',
       ensureString(body.notes),
+      ensureString(body.feishuOpenId),
+      ensureString(body.feishuUserId),
       now,
       now,
     )
@@ -1175,6 +1560,8 @@ async function updateEmployee(env: Env, employeeId: string, body: EmployeePayloa
           is_salesperson = ?,
           status = ?,
           notes = ?,
+          feishu_open_id = ?,
+          feishu_user_id = ?,
           updated_at = ?
       WHERE id = ?
     `,
@@ -1188,6 +1575,8 @@ async function updateEmployee(env: Env, employeeId: string, body: EmployeePayloa
       body.isSalesperson ? 1 : 0,
       ensureString(body.status) || 'ACTIVE',
       ensureString(body.notes),
+      ensureString(body.feishuOpenId),
+      ensureString(body.feishuUserId),
       isoNow(),
       employeeId,
     )
@@ -1347,6 +1736,111 @@ async function updateVehicleType(env: Env, vehicleTypeId: string, body: VehicleT
     .run();
 
   await recordActivity(env, '更新车型', `更新车型 ${name}。`);
+  return { ok: true };
+}
+
+function normalizeLoadingRule(row: Record<string, unknown>) {
+  return {
+    id: row.id,
+    ruleCode: row.ruleCode,
+    ruleName: row.ruleName,
+    category: row.category,
+    valueType: row.valueType,
+    ruleValue: row.ruleValue,
+    unit: row.unit,
+    enabled: Boolean(row.enabled),
+    description: row.description,
+    sortOrder: Number(row.sortOrder ?? 0),
+    applicableCountries: jsonArray<string>(ensureString(row.applicableCountries)),
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  };
+}
+
+async function listLoadingRules(env: Env) {
+  const rows = await env.DB.prepare(
+    `
+      SELECT
+        id,
+        rule_code as ruleCode,
+        rule_name as ruleName,
+        category,
+        value_type as valueType,
+        rule_value as ruleValue,
+        unit,
+        enabled,
+        description,
+        sort_order as sortOrder,
+        applicable_countries as applicableCountries,
+        created_at as createdAt,
+        updated_at as updatedAt
+      FROM loading_rules
+      ORDER BY sort_order ASC, rule_name ASC
+    `,
+  ).all<Record<string, unknown>>();
+  return rows.results.map(normalizeLoadingRule);
+}
+
+async function saveLoadingRule(env: Env, body: LoadingRulePayload, loadingRuleId?: string) {
+  const ruleCode = ensureString(body.ruleCode);
+  const ruleName = ensureString(body.ruleName);
+  if (!ruleCode || !ruleName) {
+    return { error: '规则编码和规则名称不能为空。' };
+  }
+
+  const now = isoNow();
+  const id = loadingRuleId || createId('lrule');
+  const values = [
+    ruleCode,
+    ruleName,
+    ensureString(body.category) || '通用规则',
+    ensureString(body.valueType) || 'number',
+    ensureString(body.ruleValue),
+    ensureString(body.unit),
+    boolToInt(body.enabled, true),
+    ensureString(body.description),
+    toInteger(body.sortOrder) ?? 0,
+    JSON.stringify(uniqueStrings(body.applicableCountries)),
+    now,
+  ];
+
+  if (loadingRuleId) {
+    const existing = await env.DB.prepare('SELECT id FROM loading_rules WHERE id = ?').bind(loadingRuleId).first();
+    if (!existing) return { error: '配载规则不存在。' };
+    await env.DB.prepare(
+      `
+        UPDATE loading_rules
+        SET rule_code = ?, rule_name = ?, category = ?, value_type = ?, rule_value = ?,
+            unit = ?, enabled = ?, description = ?, sort_order = ?, applicable_countries = ?, updated_at = ?
+        WHERE id = ?
+      `,
+    )
+      .bind(...values, loadingRuleId)
+      .run();
+    await recordActivity(env, '更新配载规则', `更新配载规则 ${ruleName}。`);
+  } else {
+    await env.DB.prepare(
+      `
+        INSERT INTO loading_rules (
+          id, rule_code, rule_name, category, value_type, rule_value, unit, enabled,
+          description, sort_order, applicable_countries, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `,
+    )
+      .bind(id, ...values, now)
+      .run();
+    await recordActivity(env, '新增配载规则', `新增配载规则 ${ruleName}。`);
+  }
+  return { id, ok: true };
+}
+
+async function deleteLoadingRule(env: Env, loadingRuleId: string) {
+  const existing = await env.DB.prepare('SELECT rule_name as ruleName FROM loading_rules WHERE id = ?')
+    .bind(loadingRuleId)
+    .first<{ ruleName: string }>();
+  if (!existing) return { error: '配载规则不存在。' };
+  await env.DB.prepare('DELETE FROM loading_rules WHERE id = ?').bind(loadingRuleId).run();
+  await recordActivity(env, '删除配载规则', `删除配载规则 ${existing.ruleName}。`);
   return { ok: true };
 }
 
@@ -2737,9 +3231,18 @@ function normalizeFiles(files: SupplierFilePayload[] | undefined) {
   return JSON.stringify(Array.isArray(files) ? files : []);
 }
 
+function normalizeSupplierTypes(types: string[] | undefined, fallback?: string) {
+  const values = uniqueStrings([...(Array.isArray(types) ? types : []), ensureString(fallback)].map((item) => ensureString(item))).filter(Boolean);
+  return values;
+}
+
 function mapSupplier(row: Record<string, unknown>): Record<string, unknown> {
+  const types = jsonArray<string>(row.types as string | null, []);
+  const normalizedTypes = types.length ? types : normalizeSupplierTypes(undefined, ensureString(row.type));
   return {
     ...row,
+    type: normalizedTypes[0] || ensureString(row.type),
+    types: normalizedTypes,
     attachments: jsonArray(row.attachments as string | null),
     contractFiles: jsonArray(row.contractFiles as string | null),
   };
@@ -2836,6 +3339,7 @@ async function listSuppliers(env: Env) {
         name,
         supplier_code as supplierCode,
         type,
+        types,
         contact_info as contactInfo,
         payee,
         bank_phone as bankPhone,
@@ -2864,8 +3368,9 @@ async function listSuppliers(env: Env) {
 
 async function createSupplier(env: Env, body: SupplierPayload) {
   const name = ensureString(body.name);
-  const type = ensureString(body.type);
-  if (!name || !type) {
+  const types = normalizeSupplierTypes(body.types, body.type);
+  const type = types[0] || '';
+  if (!name || !types.length) {
     return { error: '供应商名称和类型不能为空。' };
   }
 
@@ -2874,8 +3379,8 @@ async function createSupplier(env: Env, body: SupplierPayload) {
   await env.DB.prepare(
     `
       INSERT INTO suppliers (
-        id, name, supplier_code, type, contact_info, payee, bank_phone, bank_card_no, bank_name, notes, contract_status, contract_files, attachments, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        id, name, supplier_code, type, types, contact_info, payee, bank_phone, bank_card_no, bank_name, notes, contract_status, contract_files, attachments, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `,
   )
     .bind(
@@ -2883,6 +3388,7 @@ async function createSupplier(env: Env, body: SupplierPayload) {
       name,
       businessNo('SUP'),
       type,
+      JSON.stringify(types),
       ensureString(body.contactInfo),
       ensureString(body.payee),
       ensureString(body.bankPhone),
@@ -2902,8 +3408,9 @@ async function createSupplier(env: Env, body: SupplierPayload) {
 
 async function updateSupplier(env: Env, supplierId: string, body: SupplierPayload) {
   const name = ensureString(body.name);
-  const type = ensureString(body.type);
-  if (!name || !type) {
+  const types = normalizeSupplierTypes(body.types, body.type);
+  const type = types[0] || '';
+  if (!name || !types.length) {
     return { error: '供应商名称和类型不能为空。' };
   }
   const existing = await env.DB.prepare('SELECT id FROM suppliers WHERE id = ?').bind(supplierId).first();
@@ -2916,6 +3423,7 @@ async function updateSupplier(env: Env, supplierId: string, body: SupplierPayloa
       UPDATE suppliers
       SET name = ?,
           type = ?,
+          types = ?,
           contact_info = ?,
           payee = ?,
           bank_phone = ?,
@@ -2932,6 +3440,7 @@ async function updateSupplier(env: Env, supplierId: string, body: SupplierPayloa
     .bind(
       name,
       type,
+      JSON.stringify(types),
       ensureString(body.contactInfo),
       ensureString(body.payee),
       ensureString(body.bankPhone),
@@ -3140,7 +3649,7 @@ async function deleteSupplierDriver(env: Env, driverId: string) {
   return { ok: true };
 }
 
-const oversizeDefaultNodeNames = ['国内运输', '接车验货', '装车报关', '转关', '国际运输', '清关', '卸货'];
+const oversizeDefaultNodeNames = ['国内运输', '境外车预定', '接车验货', '装车报关', '转关', '国际运输', '清关', '卸货'];
 
 function normalizeServiceScope(scope: string[] | undefined) {
   const values = uniqueStrings((scope ?? []).map((item) => ensureString(item))).filter(Boolean);
@@ -3361,6 +3870,11 @@ async function listOversizeProjects(env: Env) {
              workflow_instance_nodes.driver_name as driverName, workflow_instance_nodes.driver_phone as driverPhone,
              workflow_instance_nodes.service_cost as serviceCost, workflow_instance_nodes.service_currency as serviceCurrency,
              workflow_instance_nodes.service_exchange_rate as serviceExchangeRate, workflow_instance_nodes.service_remark as serviceRemark,
+             workflow_instance_nodes.planned_start_at as plannedStartAt, workflow_instance_nodes.planned_end_at as plannedEndAt,
+             workflow_instance_nodes.planned_duration_hours as plannedDurationHours,
+             workflow_instance_nodes.warning_before_hours as warningBeforeHours,
+             workflow_instance_nodes.schedule_remark as scheduleRemark,
+             workflow_instance_nodes.schedule_updated_at as scheduleUpdatedAt,
              workflow_instance_nodes.started_at as startedAt, workflow_instance_nodes.completed_at as completedAt,
              workflow_instance_nodes.notes
       FROM workflow_instance_nodes
@@ -4404,6 +4918,12 @@ function mapWorkflowInstanceNode(row: Record<string, unknown>) {
     serviceExchangeRate: row.serviceExchangeRate,
     serviceRemark: row.serviceRemark,
     timeoutAt: row.timeoutAt,
+    plannedStartAt: row.plannedStartAt,
+    plannedEndAt: row.plannedEndAt,
+    plannedDurationHours: row.plannedDurationHours,
+    warningBeforeHours: row.warningBeforeHours,
+    scheduleRemark: row.scheduleRemark,
+    scheduleUpdatedAt: row.scheduleUpdatedAt,
     startedAt: row.startedAt,
     completedAt: row.completedAt,
     notes: row.notes,
@@ -4694,6 +5214,142 @@ async function resolveWorkflowTodoAssignee(
   };
 }
 
+async function getFeishuRecipientsForTodoAssignee(
+  env: Env,
+  assignee: { owner?: string; ownerRoleId?: string; ownerRoleName?: string },
+) {
+  const owner = ensureString(assignee.owner);
+  if (owner) {
+    const rows = await env.DB.prepare(
+      `SELECT id, name, feishu_open_id as feishuOpenId
+       FROM employees
+       WHERE status = 'ACTIVE'
+         AND COALESCE(feishu_open_id, '') != ''
+         AND (name = ? OR lower(COALESCE(email, '')) = lower(?))
+       LIMIT 5`,
+    )
+      .bind(owner, owner)
+      .all<{ id: string; name: string; feishuOpenId: string }>();
+    return rows.results;
+  }
+
+  const ownerRoleId = ensureString(assignee.ownerRoleId);
+  const ownerRoleName = ensureString(assignee.ownerRoleName);
+  if (!ownerRoleId && !ownerRoleName) return [];
+  const rows = await env.DB.prepare(
+    `SELECT DISTINCT employees.id, employees.name, employees.feishu_open_id as feishuOpenId
+     FROM employees
+     JOIN employee_roles ON employee_roles.employee_id = employees.id
+     JOIN rbac_roles ON rbac_roles.id = employee_roles.role_id
+     WHERE employees.status = 'ACTIVE'
+       AND COALESCE(employees.feishu_open_id, '') != ''
+       AND (rbac_roles.id = ? OR rbac_roles.name = ?)
+     ORDER BY employees.name ASC
+     LIMIT 20`,
+  )
+    .bind(ownerRoleId, ownerRoleName)
+    .all<{ id: string; name: string; feishuOpenId: string }>();
+  return rows.results;
+}
+
+async function notifyWorkflowTodoByFeishu(
+  env: Env,
+  todo: {
+    id: string;
+    projectId: string;
+    taskId: string;
+    nodeName: string;
+    dueAt?: string | null;
+    assignee: { owner?: string; ownerRoleId?: string; ownerRoleName?: string };
+  },
+) {
+  const recipients = await getFeishuRecipientsForTodoAssignee(env, todo.assignee);
+  if (!recipients.length) return { ok: true, sent: 0 };
+  const detail = await env.DB.prepare(
+    `SELECT oversize_projects.customer_name as customerName, oversize_projects.name as projectName,
+            oversize_project_tasks.task_no as taskNo
+     FROM oversize_projects
+     JOIN oversize_project_tasks ON oversize_project_tasks.id = ?
+     WHERE oversize_projects.id = ?`,
+  )
+    .bind(todo.taskId, todo.projectId)
+    .first<{ customerName?: string | null; projectName?: string | null; taskNo?: string | null }>();
+  const card = feishuCardContent({
+    title: `${todo.nodeName}节点待处理`,
+    customerName: detail?.customerName,
+    projectName: detail?.projectName,
+    taskNo: detail?.taskNo,
+    nodeName: todo.nodeName,
+    dueAt: todo.dueAt,
+    taskId: todo.taskId,
+    feishuAppId: ensureString(env.FEISHU_APP_ID),
+  });
+  let sent = 0;
+  for (const recipient of recipients) {
+    const result = await sendFeishuMessage(env, recipient.feishuOpenId, card);
+    if (!('error' in result)) sent += 1;
+  }
+  return { ok: true, sent };
+}
+
+async function remindWorkflowNodeByFeishu(env: Env, nodeId: string) {
+  const node = await env.DB.prepare(
+    `SELECT id, project_id as projectId, task_id as taskId, node_name as nodeName, owner,
+            owner_role_id as ownerRoleId, owner_role_name as ownerRoleName, timeout_at as timeoutAt, status
+     FROM workflow_instance_nodes
+     WHERE id = ?`,
+  )
+    .bind(nodeId)
+    .first<{
+      id: string;
+      projectId: string;
+      taskId: string;
+      nodeName: string;
+      owner?: string | null;
+      ownerRoleId?: string | null;
+      ownerRoleName?: string | null;
+      timeoutAt?: string | null;
+      status: string;
+    }>();
+  if (!node) return { error: '流程节点不存在。' };
+  if (['已完成', '已跳过', '已退回'].includes(node.status)) return { error: '该节点已完成流转，不能催办。' };
+  const assignee = await resolveWorkflowTodoAssignee(env, node);
+  const recipients = await getFeishuRecipientsForTodoAssignee(env, assignee);
+  if (!recipients.length) return { error: '未找到可接收飞书催办的员工，请先同步飞书账号或维护负责人。' };
+  const detail = await env.DB.prepare(
+    `SELECT oversize_projects.customer_name as customerName, oversize_projects.name as projectName,
+            oversize_project_tasks.task_no as taskNo
+     FROM oversize_projects
+     JOIN oversize_project_tasks ON oversize_project_tasks.id = ?
+     WHERE oversize_projects.id = ?`,
+  )
+    .bind(node.taskId, node.projectId)
+    .first<{ customerName?: string | null; projectName?: string | null; taskNo?: string | null }>();
+  const card = feishuCardContent({
+    title: `催办：${node.nodeName}节点待处理`,
+    customerName: detail?.customerName,
+    projectName: detail?.projectName,
+    taskNo: detail?.taskNo,
+    nodeName: node.nodeName,
+    dueAt: node.timeoutAt,
+    taskId: node.taskId,
+    feishuAppId: ensureString(env.FEISHU_APP_ID),
+  });
+  let sent = 0;
+  const errors: string[] = [];
+  for (const recipient of recipients) {
+    const result = await sendFeishuMessage(env, recipient.feishuOpenId, card);
+    if (!('error' in result)) {
+      sent += 1;
+    } else {
+      errors.push(`${recipient.name}：${result.error}`);
+    }
+  }
+  if (!sent) return { error: `飞书催办发送失败：${errors.join('；') || '请检查应用发消息权限。'}` };
+  await recordActivity(env, '飞书催办', `已发送 ${detail?.taskNo ?? node.taskId} ${node.nodeName} 节点催办。`);
+  return { ok: true, sent };
+}
+
 async function createWorkflowTodo(
   env: Env,
   node: {
@@ -4710,6 +5366,7 @@ async function createWorkflowTodo(
 ) {
   const now = isoNow();
   const assignee = await resolveWorkflowTodoAssignee(env, node);
+  const todoId = createId('wftd');
   await env.DB.prepare(
     `
       INSERT INTO workflow_todos (
@@ -4719,7 +5376,7 @@ async function createWorkflowTodo(
     `,
   )
     .bind(
-      createId('wftd'),
+      todoId,
       node.instanceId,
       node.id,
       node.projectId,
@@ -4736,6 +5393,110 @@ async function createWorkflowTodo(
       now,
     )
     .run();
+  try {
+    await notifyWorkflowTodoByFeishu(env, {
+      id: todoId,
+      projectId: node.projectId,
+      taskId: node.taskId,
+      nodeName: node.nodeName,
+      dueAt: node.timeoutAt ?? null,
+      assignee,
+    });
+  } catch (error) {
+    console.warn('Feishu todo notification failed.', error);
+  }
+}
+
+async function resolveWorkflowNodeTimeoutAt(env: Env, nodeId: string) {
+  const node = await env.DB.prepare(
+    `
+      SELECT workflow_instance_nodes.timeout_at as timeoutAt,
+             workflow_instance_nodes.planned_end_at as plannedEndAt,
+             workflow_template_nodes.timeout_hours as timeoutHours
+      FROM workflow_instance_nodes
+      LEFT JOIN workflow_template_nodes ON workflow_template_nodes.id = workflow_instance_nodes.template_node_id
+      WHERE workflow_instance_nodes.id = ?
+    `,
+  )
+    .bind(nodeId)
+    .first<{ timeoutAt?: string | null; plannedEndAt?: string | null; timeoutHours?: number | string | null }>();
+  const plannedEndAt = ensureString(node?.plannedEndAt);
+  if (plannedEndAt) return plannedEndAt;
+  const existingTimeoutAt = ensureString(node?.timeoutAt);
+  if (existingTimeoutAt) return existingTimeoutAt;
+  const timeoutHours = toInteger(node?.timeoutHours);
+  return timeoutHours ? new Date(Date.now() + timeoutHours * 60 * 60 * 1000).toISOString() : null;
+}
+
+async function activateWorkflowNodeAndTodo(
+  env: Env,
+  node: {
+    id: string;
+    instanceId: string;
+    projectId: string;
+    taskId: string;
+    nodeName: string;
+    owner?: string | null;
+    ownerRoleId?: string | null;
+    ownerRoleName?: string | null;
+  },
+  now: string,
+) {
+  const timeoutAt = await resolveWorkflowNodeTimeoutAt(env, node.id);
+  await env.DB.prepare('UPDATE workflow_instance_nodes SET status = ?, timeout_at = COALESCE(timeout_at, ?), updated_at = ? WHERE id = ?').bind('待处理', timeoutAt, now, node.id).run();
+  await env.DB.prepare('UPDATE workflow_instances SET current_node_id = ?, updated_at = ? WHERE id = ?').bind(node.id, now, node.instanceId).run();
+  await createWorkflowTodo(env, { ...node, timeoutAt });
+}
+
+async function updateWorkflowSchedulePlan(
+  env: Env,
+  taskId: string,
+  body: { nodes?: Array<Record<string, unknown>> },
+) {
+  const task = await env.DB.prepare('SELECT id FROM oversize_project_tasks WHERE id = ?').bind(taskId).first<{ id: string }>();
+  if (!task) return { error: '运输任务不存在。' };
+  const nodes = Array.isArray(body.nodes) ? body.nodes : [];
+  const now = isoNow();
+  for (const node of nodes) {
+    const nodeId = ensureString(node.id);
+    if (!nodeId) continue;
+    const plannedStartAt = ensureString(node.plannedStartAt) || null;
+    const plannedEndAt = ensureString(node.plannedEndAt) || null;
+    const plannedDurationHours = toNumber(node.plannedDurationHours);
+    const warningBeforeHours = toNumber(node.warningBeforeHours);
+    const scheduleRemark = ensureString(node.scheduleRemark);
+    await env.DB.prepare(
+      `
+        UPDATE workflow_instance_nodes
+        SET planned_start_at = ?,
+            planned_end_at = ?,
+            planned_duration_hours = ?,
+            warning_before_hours = ?,
+            schedule_remark = ?,
+            timeout_at = CASE
+              WHEN status IN ('待处理', '处理中') THEN COALESCE(?, timeout_at)
+              ELSE timeout_at
+            END,
+            schedule_updated_at = ?,
+            updated_at = ?
+        WHERE id = ? AND task_id = ?
+      `,
+    )
+      .bind(
+        plannedStartAt,
+        plannedEndAt,
+        plannedDurationHours,
+        warningBeforeHours,
+        scheduleRemark,
+        plannedEndAt,
+        now,
+        now,
+        nodeId,
+        taskId,
+      )
+      .run();
+  }
+  return { ok: true };
 }
 
 async function startWorkflowForTask(env: Env, taskId: string, templateId?: string | null) {
@@ -4783,6 +5544,7 @@ async function startWorkflowForTask(env: Env, taskId: string, templateId?: strin
 
   const instanceId = createId('wfi');
   const now = isoNow();
+  let plannedCursor = new Date(now);
   await env.DB.prepare(
     `
       INSERT INTO workflow_instances (id, task_id, project_id, template_id, status, started_at, created_at, updated_at)
@@ -4797,14 +5559,18 @@ async function startWorkflowForTask(env: Env, taskId: string, templateId?: strin
     const nodeId = createId('wfin');
     if (index === 0) firstNodeId = nodeId;
     const timeoutHours = toInteger(node.timeoutHours);
-    const timeoutAt = timeoutHours ? new Date(Date.now() + timeoutHours * 60 * 60 * 1000).toISOString() : null;
+    const plannedStartAt = plannedCursor.toISOString();
+    const plannedEndAt = timeoutHours ? new Date(plannedCursor.getTime() + timeoutHours * 60 * 60 * 1000).toISOString() : plannedStartAt;
+    plannedCursor = new Date(plannedEndAt);
+    const timeoutAt = index === 0 ? plannedEndAt : null;
     await env.DB.prepare(
       `
         INSERT INTO workflow_instance_nodes (
           id, instance_id, task_id, project_id, template_node_id, node_name, sort_order, node_type, owner, owner_role_id, owner_role_name,
           status, required, allow_skip, allow_return, require_customer_confirm, require_supplier, supplier_types,
-          require_vehicle, require_driver, timeout_at, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          require_vehicle, require_driver, timeout_at, planned_start_at, planned_end_at, planned_duration_hours, warning_before_hours,
+          schedule_updated_at, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
     )
       .bind(
@@ -4828,7 +5594,12 @@ async function startWorkflowForTask(env: Env, taskId: string, templateId?: strin
         node.supplierTypes || '[]',
         node.requireVehicle,
         node.requireDriver,
-        index === 0 ? timeoutAt : null,
+        timeoutAt,
+        plannedStartAt,
+        plannedEndAt,
+        timeoutHours,
+        0,
+        now,
         now,
         now,
       )
@@ -4865,11 +5636,14 @@ async function getWorkflowByTask(env: Env, taskId: string) {
              allow_skip as allowSkip, allow_return as allowReturn, require_customer_confirm as requireCustomerConfirm,
              require_supplier as requireSupplier, supplier_types as supplierTypes, require_vehicle as requireVehicle,
              require_driver as requireDriver, supplier_id as supplierId, supplier_name as supplierName,
-             supplier_type as supplierType, supplier_vehicle_id as supplierVehicleId, vehicle_plate_no as vehiclePlateNo,
-             supplier_driver_id as supplierDriverId, driver_name as driverName, driver_phone as driverPhone,
-             service_cost as serviceCost, service_currency as serviceCurrency,
-             service_exchange_rate as serviceExchangeRate, service_remark as serviceRemark,
-             timeout_at as timeoutAt, started_at as startedAt, completed_at as completedAt, notes
+              supplier_type as supplierType, supplier_vehicle_id as supplierVehicleId, vehicle_plate_no as vehiclePlateNo,
+              supplier_driver_id as supplierDriverId, driver_name as driverName, driver_phone as driverPhone,
+              service_cost as serviceCost, service_currency as serviceCurrency,
+              service_exchange_rate as serviceExchangeRate, service_remark as serviceRemark,
+              planned_start_at as plannedStartAt, planned_end_at as plannedEndAt,
+              planned_duration_hours as plannedDurationHours, warning_before_hours as warningBeforeHours,
+              schedule_remark as scheduleRemark, schedule_updated_at as scheduleUpdatedAt,
+              timeout_at as timeoutAt, started_at as startedAt, completed_at as completedAt, notes
       FROM workflow_instance_nodes
       WHERE instance_id = ?
       ORDER BY sort_order ASC
@@ -5154,9 +5928,7 @@ async function workflowNodeAction(env: Env, nodeId: string, action: string, body
       .first<{ id: string; nodeName: string; owner?: string | null; ownerRoleId?: string | null; ownerRoleName?: string | null }>();
     if (nextNode) {
       toNodeName = nextNode.nodeName;
-      await env.DB.prepare('UPDATE workflow_instance_nodes SET status = ?, updated_at = ? WHERE id = ?').bind('待处理', now, nextNode.id).run();
-      await env.DB.prepare('UPDATE workflow_instances SET current_node_id = ?, updated_at = ? WHERE id = ?').bind(nextNode.id, now, node.instanceId).run();
-      await createWorkflowTodo(env, { ...nextNode, instanceId: node.instanceId, projectId: node.projectId, taskId: node.taskId });
+      await activateWorkflowNodeAndTodo(env, { ...nextNode, instanceId: node.instanceId, projectId: node.projectId, taskId: node.taskId }, now);
     } else {
       toNodeName = '完成';
       await env.DB.prepare('UPDATE workflow_instances SET status = ?, current_node_id = NULL, completed_at = ?, updated_at = ? WHERE id = ?').bind('已完成', now, now, node.instanceId).run();
@@ -5172,9 +5944,7 @@ async function workflowNodeAction(env: Env, nodeId: string, action: string, body
     if (!prevNode) return { error: '没有可退回的上一节点。' };
     toNodeName = prevNode.nodeName;
     await env.DB.prepare('UPDATE workflow_instance_nodes SET status = ?, notes = ?, updated_at = ? WHERE id = ?').bind(nextStatus, ensureString(body.remark), now, nodeId).run();
-    await env.DB.prepare('UPDATE workflow_instance_nodes SET status = ?, updated_at = ? WHERE id = ?').bind('待处理', now, prevNode.id).run();
-    await env.DB.prepare('UPDATE workflow_instances SET current_node_id = ?, updated_at = ? WHERE id = ?').bind(prevNode.id, now, node.instanceId).run();
-    await createWorkflowTodo(env, { ...prevNode, instanceId: node.instanceId, projectId: node.projectId, taskId: node.taskId });
+    await activateWorkflowNodeAndTodo(env, { ...prevNode, instanceId: node.instanceId, projectId: node.projectId, taskId: node.taskId }, now);
   } else if (action === 'skip') {
     if (!node.allowSkip) return { error: '当前节点不允许跳过。' };
     nextStatus = '已跳过';
@@ -5186,9 +5956,7 @@ async function workflowNodeAction(env: Env, nodeId: string, action: string, body
       .first<{ id: string; nodeName: string; owner?: string | null; ownerRoleId?: string | null; ownerRoleName?: string | null }>();
     if (nextNode) {
       toNodeName = nextNode.nodeName;
-      await env.DB.prepare('UPDATE workflow_instance_nodes SET status = ?, updated_at = ? WHERE id = ?').bind('待处理', now, nextNode.id).run();
-      await env.DB.prepare('UPDATE workflow_instances SET current_node_id = ?, updated_at = ? WHERE id = ?').bind(nextNode.id, now, node.instanceId).run();
-      await createWorkflowTodo(env, { ...nextNode, instanceId: node.instanceId, projectId: node.projectId, taskId: node.taskId });
+      await activateWorkflowNodeAndTodo(env, { ...nextNode, instanceId: node.instanceId, projectId: node.projectId, taskId: node.taskId }, now);
     } else {
       toNodeName = '完成';
       await env.DB.prepare('UPDATE workflow_instances SET status = ?, current_node_id = NULL, completed_at = ?, updated_at = ? WHERE id = ?').bind('已完成', now, now, node.instanceId).run();
@@ -5670,7 +6438,8 @@ async function createAttachment(env: Env, entityType: 'customer' | 'contact', en
 
 function publicUploadUrl(request: Request, key: string) {
   const url = new URL(request.url);
-  return `${url.origin}/api/uploads/${encodeURIComponent(key)}`;
+  const safePath = key.split('/').map((part) => encodeURIComponent(part)).join('/');
+  return `${url.origin}/api/uploads/${safePath}`;
 }
 
 function xmlEscape(value: unknown) {
@@ -5755,14 +6524,14 @@ function createWatermarkSvg(input: {
   plateNo?: string;
 }) {
   const lines = [
-    `Время: ${input.timeText}`,
-    `Место: ${input.addressRu || '-'}`,
-    `地点: ${input.addressZh || '-'}`,
-    `Координаты: ${input.latitude.toFixed(6)}, ${input.longitude.toFixed(6)}`,
-    `Номер машины: ${input.plateNo || 'Не распознано'}`,
+    `Время / 时间: ${input.timeText}`,
+    `Место / 地点 RU: ${input.addressRu || '-'}`,
+    `Место / 地点 CN: ${input.addressZh || '-'}`,
+    `Координаты / 坐标: ${input.latitude.toFixed(6)}, ${input.longitude.toFixed(6)}`,
+    `Номер машины / 车牌号: ${input.plateNo || 'Не распознано / 未识别'}`,
   ];
   const textSpans = lines
-    .map((line, index) => `<text x="44" y="${720 - (lines.length - index - 1) * 34}" fill="#fff" font-size="24" font-family="Arial, sans-serif">${xmlEscape(line)}</text>`)
+    .map((line, index) => `<text x="44" y="${720 - (lines.length - index - 1) * 36}" fill="#fff" font-size="23" font-family="Arial, sans-serif">${xmlEscape(line)}</text>`)
     .join('\n');
   const map = input.mapImageUrl
     ? `<image href="${xmlEscape(input.mapImageUrl)}" x="844" y="36" width="360" height="220" preserveAspectRatio="xMidYMid slice"/><rect x="844" y="36" width="360" height="220" fill="none" stroke="#fff" stroke-width="4"/>`
@@ -5771,7 +6540,7 @@ function createWatermarkSvg(input: {
 <svg xmlns="http://www.w3.org/2000/svg" width="1240" height="800" viewBox="0 0 1240 800">
   <rect width="1240" height="800" fill="#111827"/>
   <image href="${xmlEscape(input.originalImageUrl)}" x="0" y="0" width="1240" height="800" preserveAspectRatio="xMidYMid slice"/>
-  <rect x="24" y="532" width="850" height="232" rx="24" fill="#000" opacity="0.62"/>
+  <rect x="24" y="500" width="920" height="264" rx="24" fill="#000" opacity="0.62"/>
   ${textSpans}
   ${map}
 </svg>`;
@@ -5829,7 +6598,7 @@ async function uploadDriverCheckpoint(env: Env, request: Request) {
   const watermarkedKey = `driver-checkpoints/${checkpointId}-watermarked.svg`;
   const svgBytes = encoder.encode(svg);
   await env.ASSETS.put(watermarkedKey, svgBytes.buffer.slice(svgBytes.byteOffset, svgBytes.byteOffset + svgBytes.byteLength), {
-    httpMetadata: { contentType: 'image/svg+xml; charset=utf-8' },
+    httpMetadata: { contentType: 'image/svg+xml' },
   });
   const watermarkedImageUrl = publicUploadUrl(request, watermarkedKey);
 
@@ -5949,7 +6718,7 @@ export default {
     if (request.method === 'OPTIONS') {
       const headers = new Headers();
       headers.set('access-control-allow-origin', origin);
-      headers.set('access-control-allow-methods', 'GET,POST,PATCH,DELETE,OPTIONS');
+      headers.set('access-control-allow-methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
       headers.set('access-control-allow-headers', 'content-type,authorization,x-market-token');
       return new Response(null, { status: 204, headers });
     }
@@ -6033,6 +6802,19 @@ export default {
       return json({ token, user: enrichedSessionUser }, { status: 200 }, origin);
     }
 
+    if (url.pathname === '/api/feishu/auth-url' && request.method === 'GET') {
+      const redirectUri = getFeishuRedirectUri(env, url.searchParams.get('redirect') ?? undefined);
+      const result = getFeishuAuthUrl(env, redirectUri, url.searchParams.get('state') ?? undefined);
+      if (result.error !== undefined) return badRequest(origin, result.error);
+      return json(result, { status: 200 }, origin);
+    }
+
+    if (url.pathname === '/api/feishu/mobile-login' && request.method === 'POST') {
+      const result = await loginWithFeishu(env, await parseBody<FeishuLoginRequest>(request));
+      if ('error' in result && result.error !== undefined) return json({ error: result.error }, { status: 401 }, origin);
+      return json(result, { status: 200 }, origin);
+    }
+
     if (url.pathname === '/api/market-info/collect' && request.method === 'POST') {
       const expectedToken = ensureString(env.MARKET_IMPORT_TOKEN);
       const providedToken = ensureString(request.headers.get('x-market-token')) || ensureString(request.headers.get('authorization')).replace(/^Bearer\s+/i, '');
@@ -6043,9 +6825,13 @@ export default {
     }
 
     if (url.pathname === '/api/driver/upload-checkpoint' && request.method === 'POST') {
-      const result = await uploadDriverCheckpoint(env, request);
-      if (result.error !== undefined) return badRequest(origin, result.error);
-      return json(result, { status: 201 }, origin);
+      try {
+        const result = await uploadDriverCheckpoint(env, request);
+        if (result.error !== undefined) return badRequest(origin, result.error);
+        return json(result, { status: 201 }, origin);
+      } catch (error) {
+        return badRequest(origin, error instanceof Error ? error.message : 'Driver checkpoint upload failed.');
+      }
     }
 
     const sessionUser = await getUserFromRequest(request, env);
@@ -6056,6 +6842,10 @@ export default {
     if (url.pathname === '/api/auth/me' && request.method === 'GET') {
       const rbac = await getUserRbac(env, sessionUser);
       return json({ user: { ...sessionUser, roles: rbac.roles, permissions: rbac.permissions, roleName: rbac.roles.length ? rbac.roles.join('、') : sessionUser.roleName } }, { status: 200 }, origin);
+    }
+
+    if (url.pathname === '/api/mobile/workflow-todos' && request.method === 'GET') {
+      return json({ items: await listMobileWorkflowTodos(env, sessionUser) }, { status: 200 }, origin);
     }
 
     if (url.pathname === '/api/driver/checkpoints' && request.method === 'GET') {
@@ -6117,6 +6907,13 @@ export default {
       if (!isAdminUser(sessionUser)) return unauthorized(origin);
       const result = await updateEmployeeRoles(env, employeeRolesMatch[1], await parseBody<EmployeeRolePayload>(request));
       if (result.error !== undefined) return badRequest(origin, result.error);
+      return json(result, { status: 200 }, origin);
+    }
+
+    if (url.pathname === '/api/employees/sync-feishu' && request.method === 'POST') {
+      if (!isAdminUser(sessionUser)) return unauthorized(origin);
+      const result = await syncEmployeeFeishuAccounts(env);
+      if ('error' in result && result.error !== undefined) return badRequest(origin, result.error);
       return json(result, { status: 200 }, origin);
     }
 
@@ -6337,6 +7134,29 @@ export default {
 
     if (url.pathname === '/api/vehicle-types' && request.method === 'GET') {
       return json({ items: await listVehicleTypes(env) }, { status: 200 }, origin);
+    }
+
+    if (url.pathname === '/api/loading-rules' && request.method === 'GET') {
+      return json({ items: await listLoadingRules(env) }, { status: 200 }, origin);
+    }
+
+    if (url.pathname === '/api/loading-rules' && request.method === 'POST') {
+      const result = await saveLoadingRule(env, await parseBody<LoadingRulePayload>(request));
+      if (result.error !== undefined) return badRequest(origin, result.error);
+      return json(result, { status: 201 }, origin);
+    }
+
+    const loadingRuleMatch = url.pathname.match(/^\/api\/loading-rules\/([^/]+)$/);
+    if (loadingRuleMatch && request.method === 'PUT') {
+      const result = await saveLoadingRule(env, await parseBody<LoadingRulePayload>(request), loadingRuleMatch[1]);
+      if (result.error !== undefined) return badRequest(origin, result.error);
+      return json(result, { status: 200 }, origin);
+    }
+
+    if (loadingRuleMatch && request.method === 'DELETE') {
+      const result = await deleteLoadingRule(env, loadingRuleMatch[1]);
+      if (result.error !== undefined) return badRequest(origin, result.error);
+      return json(result, { status: 200 }, origin);
     }
 
     if (url.pathname === '/api/vehicle-types' && request.method === 'POST') {
@@ -6583,6 +7403,13 @@ export default {
       return json(result, { status: 201 }, origin);
     }
 
+    const taskWorkflowScheduleMatch = url.pathname.match(/^\/api\/transport-tasks\/([^/]+)\/workflow\/schedule$/);
+    if (taskWorkflowScheduleMatch && request.method === 'PUT') {
+      const result = await updateWorkflowSchedulePlan(env, taskWorkflowScheduleMatch[1], await parseBody<{ nodes?: Array<Record<string, unknown>> }>(request));
+      if ('error' in result && result.error !== undefined) return badRequest(origin, result.error);
+      return json(result, { status: 200 }, origin);
+    }
+
     const taskWorkflowMatch = url.pathname.match(/^\/api\/transport-tasks\/([^/]+)\/workflow$/);
     if (taskWorkflowMatch && request.method === 'GET') {
       const item = await getWorkflowByTask(env, taskWorkflowMatch[1]);
@@ -6593,6 +7420,13 @@ export default {
     const workflowNodeActionMatch = url.pathname.match(/^\/api\/workflow\/instance-nodes\/([^/]+)\/(start|save|submit|return|skip|hold|exception|reassign)$/);
     if (workflowNodeActionMatch && request.method === 'POST') {
       const result = await workflowNodeAction(env, workflowNodeActionMatch[1], workflowNodeActionMatch[2], await parseBody<WorkflowActionPayload>(request));
+      if ('error' in result && result.error !== undefined) return badRequest(origin, result.error);
+      return json(result, { status: 200 }, origin);
+    }
+
+    const workflowNodeRemindMatch = url.pathname.match(/^\/api\/workflow\/instance-nodes\/([^/]+)\/remind$/);
+    if (workflowNodeRemindMatch && request.method === 'POST') {
+      const result = await remindWorkflowNodeByFeishu(env, workflowNodeRemindMatch[1]);
       if ('error' in result && result.error !== undefined) return badRequest(origin, result.error);
       return json(result, { status: 200 }, origin);
     }

@@ -25,6 +25,109 @@ body {
     #f7f9fc;
 }
 
+.mobile-workflow-page {
+  width: 100%;
+  max-width: 100vw;
+  overflow-x: hidden;
+  touch-action: pan-y;
+  -webkit-text-size-adjust: 100%;
+}
+
+.mobile-workflow-page *,
+.mobile-workflow-drawer * {
+  max-width: 100%;
+}
+
+.mobile-workflow-page .ant-card,
+.mobile-workflow-drawer .ant-drawer-content,
+.mobile-workflow-drawer .ant-drawer-body {
+  max-width: 100vw;
+  overflow-x: hidden;
+}
+
+.mobile-workflow-page .ant-input,
+.mobile-workflow-page .ant-input-number-input,
+.mobile-workflow-page .ant-select-selector,
+.mobile-workflow-page .ant-select-selection-search-input,
+.mobile-workflow-page input,
+.mobile-workflow-page textarea,
+.mobile-workflow-drawer .ant-input,
+.mobile-workflow-drawer .ant-input-number-input,
+.mobile-workflow-drawer .ant-select-selector,
+.mobile-workflow-drawer .ant-select-selection-search-input,
+.mobile-workflow-drawer input,
+.mobile-workflow-drawer textarea {
+  font-size: 16px !important;
+}
+
+.mobile-workflow-drawer .ant-drawer-content-wrapper {
+  width: 100vw !important;
+  max-width: 100vw !important;
+}
+
+.mobile-workflow-drawer .ant-select-dropdown {
+  max-width: calc(100vw - 28px) !important;
+}
+
+.mobile-workflow-drawer .ant-picker,
+.mobile-workflow-drawer .ant-input,
+.mobile-workflow-drawer .ant-select {
+  width: 100%;
+}
+
+.mobile-file-requirements {
+  margin-bottom: 12px;
+  padding: 12px;
+  border: 1px solid #e6eef8;
+  border-radius: 12px;
+  background: #f8fbff;
+}
+
+.mobile-file-requirements-title {
+  margin-bottom: 8px;
+  color: #1f2937;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.mobile-file-requirements-list {
+  display: grid;
+  gap: 8px;
+}
+
+.mobile-file-requirement {
+  display: grid;
+  gap: 2px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: #ffffff;
+  border: 1px solid #eef2f7;
+}
+
+.mobile-file-requirement.required {
+  border-color: #ffd4d4;
+  background: #fff7f7;
+}
+
+.mobile-file-requirement-name {
+  color: #1f2937;
+  font-weight: 700;
+}
+
+.mobile-file-requirement.required .mobile-file-requirement-name,
+.mobile-file-required-mark {
+  color: #ff4d4f;
+}
+
+.mobile-file-required-mark {
+  margin-right: 4px;
+}
+
+.mobile-file-requirement-meta {
+  color: #64748b;
+  font-size: 12px;
+}
+
 a {
   color: #1677ff;
 }

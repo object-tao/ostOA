@@ -41,6 +41,7 @@ import {
   DollarCircleOutlined,
   DownloadOutlined,
   EditOutlined,
+  EyeOutlined,
   FileExcelOutlined,
   FileTextOutlined,
   FundOutlined,
@@ -75,6 +76,8 @@ import { OversizeProjectManagementPage, OversizeTaskManagementPage } from './pag
 import { TrackingPage } from './pages/TrackingPage';
 import { EmployeeRoleSelect, PermissionManagementPage } from './pages/PermissionManagementPage';
 import { WorkflowTemplatePage, WorkflowTodoPage } from './pages/WorkflowManagementPages';
+import { MobileWorkflowPage } from './pages/MobileWorkflowPage';
+import { LoadingPlan3DPreview } from './components/LoadingPlan3DPreview';
 
 const { Header, Content, Sider } = Layout;
 const { Title, Text, Paragraph } = Typography;
@@ -352,6 +355,10 @@ function canUploadQuote(record?: TransportInquiry | null) {
 }
 
 export default function App() {
+  if (typeof window !== 'undefined' && window.location.pathname.startsWith('/mobile/workflow')) {
+    return <MobileWorkflowPage />;
+  }
+
   const [loginForm] = Form.useForm();
   const [inquiryForm] = Form.useForm();
   const [planForm] = Form.useForm();
@@ -395,6 +402,7 @@ export default function App() {
   const [loadingPlanSaved, setLoadingPlanSaved] = useState(false);
   const [loadingPlanUploadFiles, setLoadingPlanUploadFiles] = useState<UploadFile[]>([]);
   const [selectedLoadingPlanRecord, setSelectedLoadingPlanRecord] = useState<LoadingPlanRecord | null>(null);
+  const [previewLoadingVehicle, setPreviewLoadingVehicle] = useState<{ vehicle: LoadingPlan['vehicles'][number]; index: number } | null>(null);
   const [aiOptimizeOpen, setAiOptimizeOpen] = useState(false);
   const [aiOptimizeLoading, setAiOptimizeLoading] = useState(false);
   const [aiManualPlanText, setAiManualPlanText] = useState('');
@@ -885,22 +893,23 @@ export default function App() {
     setLoadingPlan(recalculateLoadingPlan(updated));
   };
 
-  const changeLoadingVehicleType = (sourceVehicleId: string, nextVehicleId: string) => {
-    if (!loadingPlan || sourceVehicleId === nextVehicleId) {
+  const changeLoadingVehicleType = (sourceVehicleIndex: number, nextVehicleId: string) => {
+    if (!loadingPlan) {
       return;
     }
     const nextVehicle = vehicleTypes.find((item) => item.id === nextVehicleId);
-    if (!nextVehicle) {
+    const sourceVehicle = loadingPlan.vehicles[sourceVehicleIndex];
+    if (!nextVehicle || !sourceVehicle || sourceVehicle.vehicle.id === nextVehicleId) {
       return;
     }
     const updated = {
       ...loadingPlan,
-      vehicles: loadingPlan.vehicles.map((vehicle) =>
-        vehicle.vehicle.id === sourceVehicleId
+      vehicles: loadingPlan.vehicles.map((vehicle, index) =>
+        index === sourceVehicleIndex
           ? {
               ...vehicle,
               vehicle: nextVehicle,
-              loadingMethod: `${vehicle.loadingMethod || '????'} / ??????`,
+              loadingMethod: `${vehicle.loadingMethod || '手工调整'} / 调整车型`,
               assignments: vehicle.assignments.map((item) => ({
                 ...item,
                 vehicleId: nextVehicle.id,
@@ -1412,6 +1421,7 @@ export default function App() {
     { title: '文件', width: 90, render: (_, row) => <Tag icon={<PaperClipOutlined />}>{row.cargoFiles?.length ?? 0}</Tag> },
     { title: '期望到达', width: 120, render: (_, row) => nowrapText(dateText(row.targetArrivalDate)) },
     { title: '询单时间', width: 180, render: (_, row) => nowrapText(formatBeijingTime(row.createdAt, true)) },
+    { title: '报价时间', width: 180, render: (_, row) => nowrapText(row.quotedAt ? formatBeijingTime(row.quotedAt, true) : '-') },
     {
       title: '操作',
       width: 260,
@@ -1705,7 +1715,7 @@ export default function App() {
     home: 'home.view',
     workflowTodos: 'todo.view',
     tracking: 'tracking.view',
-    driverCheckpoints: 'tracking.view',
+    driverCheckpoints: 'home.view',
     marketInfo: 'market.view',
     inquiries: 'inquiry.view',
     loading: 'loading.view',
@@ -2101,16 +2111,19 @@ export default function App() {
                       </Space>
                       {loadingPlan.vehicles.map((vehicle, vehicleIndex) => (
                         <Card
-                          key={vehicle.vehicle.id}
+                          key={`${vehicle.vehicle.id}-${vehicleIndex}`}
                           size="small"
                           title={loadingVehicleTitle(vehicle)}
                           extra={
                             <Space>
+                              <Button icon={<EyeOutlined />} onClick={() => setPreviewLoadingVehicle({ vehicle, index: vehicleIndex })}>
+                                3D预览
+                              </Button>
                               <Text type="secondary">调整车型</Text>
                               <Select
                                 value={vehicle.vehicle.id}
                                 options={vehicleTypes.map((item) => ({ value: item.id, label: `${item.category} / ${item.name}` }))}
-                                onChange={(value) => changeLoadingVehicleType(vehicle.vehicle.id, value)}
+                                onChange={(value) => changeLoadingVehicleType(vehicleIndex, value)}
                                 style={{ width: 260 }}
                               />
                             </Space>
@@ -2384,6 +2397,11 @@ export default function App() {
                 key={`${vehicle.vehicle.id}-${index}`}
                 size="small"
                 title={`第 ${index + 1} 车：${loadingVehicleTitle(vehicle)}`}
+                extra={
+                  <Button icon={<EyeOutlined />} onClick={() => setPreviewLoadingVehicle({ vehicle, index })}>
+                    3D预览
+                  </Button>
+                }
               >
                 <Row gutter={[12, 12]} style={{ marginBottom: 12 }}>
                   <Col xs={24} md={6}>
@@ -2418,6 +2436,17 @@ export default function App() {
             ))}
           </Space>
         ) : null}
+      </Modal>
+
+      <Modal
+        title={previewLoadingVehicle ? `第 ${previewLoadingVehicle.index + 1} 车 3D装车预览` : '3D装车预览'}
+        open={Boolean(previewLoadingVehicle)}
+        onCancel={() => setPreviewLoadingVehicle(null)}
+        footer={null}
+        width={1080}
+        destroyOnHidden
+      >
+        {previewLoadingVehicle ? <LoadingPlan3DPreview vehicleResult={previewLoadingVehicle.vehicle} vehicleIndex={previewLoadingVehicle.index} /> : null}
       </Modal>
 
       <Modal

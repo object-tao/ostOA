@@ -85,6 +85,7 @@ type SupplierOption = {
   name: string;
   supplierCode?: string | null;
   type: string;
+  types?: string[];
   contactInfo?: string | null;
   vehicles?: SupplierVehicleOption[];
   drivers?: SupplierDriverOption[];
@@ -210,6 +211,12 @@ type WorkflowInstanceNode = {
   serviceExchangeRate?: number | null;
   serviceRemark?: string | null;
   timeoutAt?: string | null;
+  plannedStartAt?: string | null;
+  plannedEndAt?: string | null;
+  plannedDurationHours?: number | null;
+  warningBeforeHours?: number | null;
+  scheduleRemark?: string | null;
+  scheduleUpdatedAt?: string | null;
   startedAt?: string | null;
   completedAt?: string | null;
   notes?: string | null;
@@ -348,8 +355,8 @@ const todoStatuses = ['待处理', '处理中', '已完成'];
 const exceptionStatuses = ['处理中', '已解决', '已关闭'];
 const exceptionLevels = ['一般', '重要', '紧急'];
 const priorities = ['普通', '重要', '紧急'];
-const serviceScopeOptions = ['国内运输', '国际运输', '接车验货', '装车报关', '转关', '清关', '卸货'];
-const taskFollowFlow = ['国内运输', '接车验货', '装车报关', '转关', '国际运输', '清关', '卸货', '完成'];
+const serviceScopeOptions = ['国内运输', '境外车预定', '国际运输', '接车验货', '装车报关', '转关', '清关', '卸货'];
+const taskFollowFlow = ['国内运输', '境外车预定', '接车验货', '装车报关', '转关', '国际运输', '清关', '卸货', '完成'];
 const trackingStatusOptions = ['已提货', '在途', '到达', '等待', '查验', '文件已提交', '已同步客户', '异常', '其他'];
 const workflowTransitionActions = ['start', 'save', 'submit', 'return', 'skip', 'hold', 'exception', 'reassign'];
 
@@ -390,6 +397,10 @@ const sortTrackingRecords = <T extends { trackedAt?: string | null; createdAt?: 
   [...(records ?? [])].sort((a, b) => trackingTimeValue(b.trackedAt || b.createdAt) - trackingTimeValue(a.trackedAt || a.createdAt));
 const isCompletedTask = (task?: Pick<OversizeTask, 'status' | 'workflowStatus' | 'progress'> | null) =>
   Boolean(task && (task.status === '已完成' || task.status === '完成' || task.workflowStatus === '已完成' || Number(task.progress) >= 100));
+const supplierRoleList = (supplier?: Pick<SupplierOption, 'type' | 'types'> | null) => {
+  const values = [...(supplier?.types ?? []), supplier?.type].map((item) => String(item ?? '').trim()).filter(Boolean);
+  return [...new Set(values)];
+};
 
 export function OversizeProjectManagementPage({ customers }: OversizeProjectManagementPageProps) {
   const [projects, setProjects] = useState<OversizeProject[]>([]);
@@ -1267,6 +1278,7 @@ export function OversizeTaskManagementPage({ openRequest }: { openRequest?: Over
   const [taskWorkflow, setTaskWorkflow] = useState<WorkflowInstance | null>(null);
   const [workflowLoading, setWorkflowLoading] = useState(false);
   const [workflowNodeModal, setWorkflowNodeModal] = useState<FormMode<WorkflowInstanceNode>>({ open: false });
+  const [scheduleModalOpen, setScheduleModalOpen] = useState(false);
   const [trackingModal, setTrackingModal] = useState<FormMode<WorkflowTrackingRecord> & { node?: WorkflowInstanceNode | null }>({ open: false });
   const [costItems, setCostItems] = useState<TaskCostItem[]>([]);
   const [costModal, setCostModal] = useState<FormMode<TaskCostItem>>({ open: false });
@@ -1281,6 +1293,7 @@ export function OversizeTaskManagementPage({ openRequest }: { openRequest?: Over
   });
   const [taskForm] = Form.useForm();
   const [workflowForm] = Form.useForm();
+  const [scheduleForm] = Form.useForm();
   const [trackingForm] = Form.useForm();
   const [costForm] = Form.useForm();
   const selectedWorkflowSupplierId = Form.useWatch('supplierId', workflowForm);
@@ -1359,10 +1372,10 @@ export function OversizeTaskManagementPage({ openRequest }: { openRequest?: Over
   const workflowSupplierOptions = useMemo(() => {
     const allowedTypes = workflowNodeModal.record?.supplierTypes ?? [];
     return suppliers
-      .filter((supplier) => !allowedTypes.length || allowedTypes.includes(supplier.type))
+      .filter((supplier) => !allowedTypes.length || supplierRoleList(supplier).some((type) => allowedTypes.includes(type)))
       .map((supplier) => ({
         value: supplier.id,
-        label: `${supplier.supplierCode ? `${supplier.supplierCode} · ` : ''}${supplier.name}（${supplier.type}）`,
+        label: `${supplier.supplierCode ? `${supplier.supplierCode} · ` : ''}${supplier.name}（${supplierRoleList(supplier).join(' / ') || '-'}）`,
       }));
   }, [suppliers, workflowNodeModal.record]);
 
@@ -1437,6 +1450,48 @@ export function OversizeTaskManagementPage({ openRequest }: { openRequest?: Over
     void loadTaskCosts(record.id);
   };
 
+  const openScheduleModal = () => {
+    if (!taskWorkflow?.nodes?.length) return;
+    setScheduleModalOpen(true);
+    scheduleForm.setFieldsValue({
+      nodes: taskWorkflow.nodes.map((node) => ({
+        id: node.id,
+        nodeName: node.nodeName,
+        status: node.status,
+        plannedStartAt: toDateValue(node.plannedStartAt),
+        plannedEndAt: toDateValue(node.plannedEndAt || node.timeoutAt),
+        plannedDurationHours: node.plannedDurationHours,
+        warningBeforeHours: node.warningBeforeHours ?? 0,
+        scheduleRemark: node.scheduleRemark,
+      })),
+    });
+  };
+
+  const saveSchedulePlan = async () => {
+    if (!selectedTask) return;
+    const values = await scheduleForm.validateFields();
+    setSaving(true);
+    try {
+      await apiRequest(`/api/transport-tasks/${selectedTask.id}/workflow/schedule`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          nodes: (values.nodes ?? []).map((node: Record<string, unknown>) => ({
+            ...node,
+            plannedStartAt: serializeDateValue(node.plannedStartAt, 'YYYY-MM-DD HH:mm'),
+            plannedEndAt: serializeDateValue(node.plannedEndAt, 'YYYY-MM-DD HH:mm'),
+          })),
+        }),
+      });
+      message.success('时效计划已更新');
+      setScheduleModalOpen(false);
+      await loadTaskWorkflow(selectedTask.id);
+    } catch (error) {
+      message.error((error as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const openWorkflowNodeModal = (node: WorkflowInstanceNode, action: string) => {
     if (isCompletedTask(selectedTask)) {
       message.info('运输任务已完成，不能再操作流程。');
@@ -1467,6 +1522,15 @@ export function OversizeTaskManagementPage({ openRequest }: { openRequest?: Over
       serviceRemark: node.serviceRemark,
       formValues: normalizedFormValues,
     });
+  };
+
+  const remindWorkflowNode = async (node: WorkflowInstanceNode) => {
+    try {
+      const result = await apiRequest<{ sent?: number }>(`/api/workflow/instance-nodes/${node.id}/remind`, { method: 'POST' });
+      message.success(`催办已发送${result.sent ? `：${result.sent} 人` : ''}`);
+    } catch (error) {
+      message.error((error as Error).message);
+    }
   };
 
   const uploadWorkflowFiles = async (files?: UploadFile[]) => {
@@ -1639,7 +1703,7 @@ export function OversizeTaskManagementPage({ openRequest }: { openRequest?: Over
           visibilityLevel: values.visibilityLevel,
           supplierId: values.supplierId,
           supplierName: supplier?.name ?? '',
-          supplierType: supplier?.type ?? '',
+          supplierType: supplierRoleList(supplier).join(' / '),
           supplierVehicleId: values.supplierVehicleId,
           vehiclePlateNo: vehicle?.plateNo ?? '',
           supplierDriverId: values.supplierDriverId,
@@ -2029,6 +2093,11 @@ export function OversizeTaskManagementPage({ openRequest }: { openRequest?: Over
             </Card>
 
             <Card size="small" title="节点处理">
+              {!isCompletedTask(selectedTask) ? (
+                <div style={{ marginBottom: 12, textAlign: 'right' }}>
+                  <Button size="small" onClick={openScheduleModal}>编辑时效计划</Button>
+                </div>
+              ) : null}
               <Table
                 rowKey="id"
                 size="small"
@@ -2085,6 +2154,7 @@ export function OversizeTaskManagementPage({ openRequest }: { openRequest?: Over
                           {record.allowSkip ? <Button size="small" onClick={() => openWorkflowNodeModal(record, 'skip')}>跳过</Button> : null}
                           <Button size="small" onClick={() => openWorkflowNodeModal(record, 'hold')}>挂起</Button>
                           <Button size="small" danger onClick={() => openWorkflowNodeModal(record, 'exception')}>异常</Button>
+                          <Button size="small" onClick={() => void remindWorkflowNode(record)}>催办</Button>
                         </Space>
                       ) : (
                         <Tag>{isCompletedTask(selectedTask) ? '已完成' : '不可操作'}</Tag>
@@ -2269,6 +2339,85 @@ export function OversizeTaskManagementPage({ openRequest }: { openRequest?: Over
       </Drawer>
 
       <Modal
+        title="编辑时效计划"
+        open={scheduleModalOpen}
+        onCancel={() => setScheduleModalOpen(false)}
+        onOk={saveSchedulePlan}
+        confirmLoading={saving}
+        width={1080}
+      >
+        <Form form={scheduleForm} layout="vertical">
+          <Form.List name="nodes">
+            {(fields) => (
+              <Table
+                rowKey="key"
+                size="small"
+                pagination={false}
+                dataSource={fields}
+                columns={[
+                  {
+                    title: '节点',
+                    width: 130,
+                    render: (_, field) => (
+                      <>
+                        <Form.Item name={[field.name, 'id']} hidden><Input /></Form.Item>
+                        <Form.Item name={[field.name, 'nodeName']} style={{ marginBottom: 0 }}><Input disabled /></Form.Item>
+                      </>
+                    ),
+                  },
+                  {
+                    title: '计划开始',
+                    width: 180,
+                    render: (_, field) => (
+                      <Form.Item name={[field.name, 'plannedStartAt']} style={{ marginBottom: 0 }}>
+                        <DatePicker showTime style={{ width: '100%' }} />
+                      </Form.Item>
+                    ),
+                  },
+                  {
+                    title: '计划完成',
+                    width: 180,
+                    render: (_, field) => (
+                      <Form.Item name={[field.name, 'plannedEndAt']} style={{ marginBottom: 0 }}>
+                        <DatePicker showTime style={{ width: '100%' }} />
+                      </Form.Item>
+                    ),
+                  },
+                  {
+                    title: '计划耗时/h',
+                    width: 110,
+                    render: (_, field) => (
+                      <Form.Item name={[field.name, 'plannedDurationHours']} style={{ marginBottom: 0 }}>
+                        <InputNumber min={0} precision={1} style={{ width: '100%' }} />
+                      </Form.Item>
+                    ),
+                  },
+                  {
+                    title: '预警提前/h',
+                    width: 110,
+                    render: (_, field) => (
+                      <Form.Item name={[field.name, 'warningBeforeHours']} style={{ marginBottom: 0 }}>
+                        <InputNumber min={0} precision={1} style={{ width: '100%' }} />
+                      </Form.Item>
+                    ),
+                  },
+                  {
+                    title: '调整原因',
+                    render: (_, field) => (
+                      <Form.Item name={[field.name, 'scheduleRemark']} style={{ marginBottom: 0 }}>
+                        <Input placeholder="如口岸拥堵、旺季、客户要求等" />
+                      </Form.Item>
+                    ),
+                  },
+                ]}
+                scroll={{ x: 900 }}
+              />
+            )}
+          </Form.List>
+        </Form>
+      </Modal>
+
+      <Modal
         title={workflowNodeModal.record ? `${workflowNodeModal.record.nodeName} · ${workflowAction}` : '处理流程节点'}
         open={workflowNodeModal.open}
         onCancel={() => setWorkflowNodeModal({ open: false })}
@@ -2317,7 +2466,7 @@ export function OversizeTaskManagementPage({ openRequest }: { openRequest?: Over
                 </Col>
                 <Col xs={24} md={12}>
                   <Form.Item name="supplierType" label="供应商类型">
-                    <Input value={selectedWorkflowSupplier?.type} disabled placeholder={selectedWorkflowSupplier?.type || '-'} />
+                    <Input value={supplierRoleList(selectedWorkflowSupplier).join(' / ')} disabled placeholder={supplierRoleList(selectedWorkflowSupplier).join(' / ') || '-'} />
                   </Form.Item>
                 </Col>
                 <Col xs={24} md={12}>
@@ -2489,7 +2638,7 @@ export function OversizeTaskManagementPage({ openRequest }: { openRequest?: Over
                   optionFilterProp="label"
                   options={suppliers.map((supplier) => ({
                     value: supplier.id,
-                    label: `${supplier.supplierCode ? `${supplier.supplierCode} / ` : ''}${supplier.name}${supplier.type ? ` / ${supplier.type}` : ''}`,
+                    label: `${supplier.supplierCode ? `${supplier.supplierCode} / ` : ''}${supplier.name}${supplierRoleList(supplier).length ? ` / ${supplierRoleList(supplier).join(' / ')}` : ''}`,
                   }))}
                 />
               </Form.Item>
