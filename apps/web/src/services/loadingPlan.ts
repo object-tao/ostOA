@@ -26,6 +26,8 @@ export type LoadingVehicle = {
   effectiveHeight?: number | null;
   effectiveVolume?: number | null;
   payloadWeight?: number | null;
+  tareWeight?: number | null;
+  isClosed?: boolean | number | null;
   priceSort?: number | null;
   priceWeight?: number | null;
   scenario?: string | null;
@@ -45,6 +47,9 @@ export type LoadingAssignment = {
   heightCm?: number;
   weightKg: number;
   volumeCbm: number;
+  allowRotate?: boolean;
+  allowStack?: boolean;
+  remark?: string;
   notes: string[];
 };
 
@@ -88,6 +93,8 @@ export type LoadingPlanOptions = {
   title?: string;
   destinationCountry?: string;
   destinationCountries?: string[];
+  loadingStrategy?: 'quoteSafe' | 'executionOptimized';
+  vehiclePreference?: 'default' | 'lowestPriceWeight' | 'maxCapacity' | 'maxClearance' | 'flatbedFirst' | 'tarpFirst';
   loadingRules?: LoadingRuleOverride[];
 };
 
@@ -128,6 +135,9 @@ export const loadingRules = {
   flatbedCostPlanLengthMm: 17_000,
   mediumFlatbedSeedWeightKg: 12_000,
   russiaMaxVehicleCargoHeightMm: 5_200,
+  russiaCargoHeightLimitMm: 4_200,
+  deckPressureLimitKgPerMm: 4,
+  rotatedLoadMaxWidthMm: 3_500,
   multiCargoHardSplitWeightKg: 44_000,
   multiCargoRiskSplitWeightKg: 42_000,
   russiaBatchMinItems: 40,
@@ -157,6 +167,10 @@ export const loadingRules = {
   russiaLongCargoMinLengthMm: 24_000,
   russiaLongCargoTargetWidthMm: 3_000,
   russiaLongCargoMaxGroupWeightKg: 70_000,
+  pipeBatchMinQuantity: 30,
+  pipeBatchQuoteSafeMaxWeightKg: 30_800,
+  pipeBatchTarpSafeMaxWeightKg: 19_000,
+  pipeBatchLargeDiameterMm: 900,
 };
 
 type LoadingRules = typeof loadingRules;
@@ -207,6 +221,10 @@ function isOversizeVehicle(vehicle: LoadingVehicle) {
   return includesAny(vehicleText(vehicle), ['超限', '特种', '抽拉', '超低', '塔筒', '叶片', '轴线', '拼接']);
 }
 
+function isSpecialDeckVehicle(vehicle: LoadingVehicle) {
+  return isOversizeVehicle(vehicle) || includesAny(vehicleText(vehicle), ['特种板']);
+}
+
 function vehiclePayloadLimit(vehicle: LoadingVehicle) {
   if (isFlatbedVehicle(vehicle)) {
     return activeLoadingRules.flatbedWeightLimitKg;
@@ -217,6 +235,49 @@ function vehiclePayloadLimit(vehicle: LoadingVehicle) {
 function vehiclePriceSort(vehicle: LoadingVehicle) {
   const value = Number(vehicle.priceWeight ?? vehicle.priceSort);
   return Number.isFinite(value) && value > 0 ? value : 999_999;
+}
+
+function vehiclePreferenceRank(vehicle: LoadingVehicle, preference: LoadingPlanOptions['vehiclePreference']) {
+  if (preference === 'flatbedFirst') {
+    return isFlatbedVehicle(vehicle) ? 0 : isOversizeVehicle(vehicle) ? 1 : isTarpVehicle(vehicle) ? 2 : 3;
+  }
+  if (preference === 'tarpFirst') {
+    return isTarpVehicle(vehicle) ? 0 : isFlatbedVehicle(vehicle) ? 1 : isOversizeVehicle(vehicle) ? 2 : 3;
+  }
+  return 0;
+}
+
+function prepareVehiclesForStrategy(vehicles: LoadingVehicle[], options: LoadingPlanOptions) {
+  const preference = options.vehiclePreference ?? 'default';
+  return [...vehicles].sort((a, b) => {
+    const preferenceScore = vehiclePreferenceRank(a, preference) - vehiclePreferenceRank(b, preference);
+    if (preferenceScore) return preferenceScore;
+    if (preference === 'maxCapacity') {
+      return (
+        vehiclePayloadLimit(b) - vehiclePayloadLimit(a) ||
+        positive(b.effectiveVolume) - positive(a.effectiveVolume) ||
+        vehiclePriceSort(a) - vehiclePriceSort(b)
+      );
+    }
+    if (preference === 'maxClearance') {
+      return (
+        positive(b.effectiveLength) - positive(a.effectiveLength) ||
+        positive(b.effectiveWidth) - positive(a.effectiveWidth) ||
+        positive(b.effectiveHeight) - positive(a.effectiveHeight) ||
+        positive(b.effectiveVolume) - positive(a.effectiveVolume) ||
+        vehiclePayloadLimit(b) - vehiclePayloadLimit(a) ||
+        vehiclePriceSort(a) - vehiclePriceSort(b)
+      );
+    }
+    if (preference === 'lowestPriceWeight') {
+      return (
+        vehiclePriceSort(a) - vehiclePriceSort(b) ||
+        vehiclePayloadLimit(b) - vehiclePayloadLimit(a) ||
+        positive(b.effectiveVolume) - positive(a.effectiveVolume)
+      );
+    }
+    return vehiclePriceSort(a) - vehiclePriceSort(b) || vehiclePayloadLimit(b) - vehiclePayloadLimit(a);
+  });
 }
 
 function vehicleLengthMm(vehicle: LoadingVehicle) {
@@ -237,14 +298,21 @@ function vehicleHeightMm(vehicle: LoadingVehicle) {
   return value <= 20 ? value * 1000 : value;
 }
 
-function placementLengthMm(cargo: CargoItem) {
+function shouldRotateForPlacement(cargo: CargoItem) {
+  if (!cargo.allowRotate) {
+    return false;
+  }
   const longSide = Math.max(cargo.lengthCm, cargo.widthCm);
   const shortSide = Math.min(cargo.lengthCm, cargo.widthCm);
-  if (!cargo.allowRotate) return cargo.lengthCm;
-  // Road transport cannot rotate a long beam so that its long side becomes vehicle width.
-  // Only compact cargo whose long side can still fit within normal deck width may use the shorter placement length.
-  if (longSide > 2_550 && shortSide <= 2_550) return longSide;
-  return shortSide;
+  return longSide !== shortSide && longSide <= activeLoadingRules.rotatedLoadMaxWidthMm;
+}
+
+function placementLengthMm(cargo: CargoItem) {
+  return shouldRotateForPlacement(cargo) ? Math.min(cargo.lengthCm, cargo.widthCm) : cargo.lengthCm;
+}
+
+function placementWidthMm(cargo: CargoItem) {
+  return shouldRotateForPlacement(cargo) ? Math.max(cargo.lengthCm, cargo.widthCm) : cargo.widthCm;
 }
 
 function cargoUnitVolume(cargo: CargoItem) {
@@ -271,6 +339,25 @@ function canBeUpperCargo(cargo: CargoItem) {
   return cargo.allowStack || includesAny(cargoRemarkText(cargo), ['可以上高', '可上高', '可叠放', '可叠', '上面可以压轻货']);
 }
 
+function isPipeCargo(cargo: CargoItem) {
+  const text = cargoRemarkText(cargo).toLowerCase();
+  return (
+    includesAny(text, ['管', 'pipe', 'tube']) &&
+    cargo.lengthCm >= 3_000 &&
+    cargo.widthCm >= 200 &&
+    cargo.widthCm <= 2_000 &&
+    Math.abs(cargo.widthCm - cargo.heightCm) <= Math.max(120, Math.min(cargo.widthCm, cargo.heightCm) * 0.25)
+  );
+}
+
+function isPipeBatch(pool: CargoUnit[]) {
+  if (pool.length < activeLoadingRules.pipeBatchMinQuantity) {
+    return false;
+  }
+  const pipeCount = pool.filter(isPipeCargo).length;
+  return pipeCount / pool.length >= 0.8;
+}
+
 function isSmallFillerCargo(cargo: CargoItem) {
   return cargo.weightKg <= 1_600 && cargo.lengthCm <= 6_500 && cargo.widthCm <= 1_700 && cargo.heightCm <= 1_800;
 }
@@ -290,6 +377,9 @@ function isStackableLargeCargo(cargo: CargoItem) {
 }
 
 function flatbedCanCarryGroup(items: CargoItem[]) {
+  if (items.some(requiresSpecialDeck)) {
+    return false;
+  }
   if (items.length > 1 && sumWeight(items) >= activeLoadingRules.multiCargoHardSplitWeightKg) {
     return false;
   }
@@ -297,7 +387,7 @@ function flatbedCanCarryGroup(items: CargoItem[]) {
 }
 
 function floorPlanLengthMm(items: CargoItem[], usableWidthMm = activeLoadingRules.flatbedDeckWidthMm) {
-  const areaLength = items.reduce((sum, item) => sum + placementLengthMm(item) * item.widthCm, 0) / usableWidthMm;
+  const areaLength = items.reduce((sum, item) => sum + placementLengthMm(item) * placementWidthMm(item), 0) / usableWidthMm;
   return Math.max(maxLength(items), areaLength);
 }
 
@@ -313,7 +403,7 @@ function isMediumFlatbedSeed(cargo: CargoItem) {
   return (
     cargo.weightKg >= activeLoadingRules.mediumFlatbedSeedWeightKg &&
     cargo.weightKg <= activeLoadingRules.flatbedWeightLimitKg &&
-    cargo.widthCm <= activeLoadingRules.flatbedSoftWidthMm &&
+    placementWidthMm(cargo) <= activeLoadingRules.flatbedSoftWidthMm &&
     placementLengthMm(cargo) <= activeLoadingRules.flatbedCostPlanLengthMm
   );
 }
@@ -362,12 +452,12 @@ function maxLength(items: CargoItem[]) {
 }
 
 function maxWidth(items: CargoItem[]) {
-  return items.reduce((max, item) => Math.max(max, item.widthCm), 0);
+  return items.reduce((max, item) => Math.max(max, placementWidthMm(item)), 0);
 }
 
 function hasOversizeDimension(cargo: CargoItem) {
   return (
-    cargo.widthCm > activeLoadingRules.oversizeWidthMm ||
+    placementWidthMm(cargo) > activeLoadingRules.oversizeWidthMm ||
     cargo.heightCm > activeLoadingRules.oversizeHeightMm ||
     cargo.lengthCm > 13_600
   );
@@ -377,12 +467,22 @@ function isHeavyForFlatbed(cargo: CargoItem) {
   return cargo.weightKg > activeLoadingRules.flatbedWeightLimitKg;
 }
 
+function deckPressureKgPerMm(cargo: CargoItem) {
+  const supportLength = Math.max(placementLengthMm(cargo), cargo.lengthCm, 1);
+  return cargo.weightKg / supportLength;
+}
+
+function requiresSpecialDeck(cargo: CargoItem) {
+  return deckPressureKgPerMm(cargo) > activeLoadingRules.deckPressureLimitKgPerMm;
+}
+
 function shouldPreferOversize(cargo: CargoItem) {
   return (
+    requiresSpecialDeck(cargo) ||
     isHeavyForFlatbed(cargo) ||
-    cargo.widthCm >= activeLoadingRules.oversizeWidthMm ||
+    placementWidthMm(cargo) >= activeLoadingRules.oversizeWidthMm ||
     cargo.heightCm >= 3_800 ||
-    (cargo.widthCm >= activeLoadingRules.oversizeCandidateWidthMm && cargo.weightKg >= activeLoadingRules.flatbedWeightLimitKg)
+    (placementWidthMm(cargo) >= activeLoadingRules.oversizeCandidateWidthMm && cargo.weightKg >= activeLoadingRules.flatbedWeightLimitKg)
   );
 }
 
@@ -730,6 +830,107 @@ function buildProjectBatchBins(pool: CargoUnit[], vehicles: LoadingVehicle[]) {
   return { bins, rest };
 }
 
+function choosePipeBatchTarpVehicle(vehicles: LoadingVehicle[], requiredWeight: number) {
+  const candidates = vehicles
+    .filter(isTarpVehicle)
+    .filter((vehicle) => vehiclePayloadLimit(vehicle) >= requiredWeight && (!vehicleLengthMm(vehicle) || vehicleLengthMm(vehicle) >= 12_000))
+    .sort((a, b) => {
+      const aScore =
+        Number(vehicleText(a).includes('大通道')) * 30 +
+        Number((vehicleLengthMm(a) ?? 0) >= 13_000) * 10 +
+        Number((a.axleCount ?? a.lineCount ?? 0) >= 5) * 5;
+      const bScore =
+        Number(vehicleText(b).includes('大通道')) * 30 +
+        Number((vehicleLengthMm(b) ?? 0) >= 13_000) * 10 +
+        Number((b.axleCount ?? b.lineCount ?? 0) >= 5) * 5;
+      return bScore - aScore || vehiclePriceSort(a) - vehiclePriceSort(b) || vehiclePayloadLimit(a) - vehiclePayloadLimit(b);
+    });
+  return candidates[0] ?? null;
+}
+
+function choosePipeBatchVehicle(vehicles: LoadingVehicle[], requiredWeight: number, preferTarp: boolean) {
+  const tarp = preferTarp ? choosePipeBatchTarpVehicle(vehicles, requiredWeight) : null;
+  if (tarp) return tarp;
+  const candidates = vehicles
+    .filter(isFlatbedVehicle)
+    .filter((vehicle) => vehiclePayloadLimit(vehicle) >= requiredWeight && (!vehicleLengthMm(vehicle) || vehicleLengthMm(vehicle) >= 12_000))
+    .sort((a, b) => {
+      const aScore =
+        Number(vehicleText(a).includes('17')) * 20 +
+        Number((a.axleCount ?? a.lineCount) === 6) * 12 +
+        Number(vehicleLengthMm(a) >= 16_000) * 5;
+      const bScore =
+        Number(vehicleText(b).includes('17')) * 20 +
+        Number((b.axleCount ?? b.lineCount) === 6) * 12 +
+        Number(vehicleLengthMm(b) >= 16_000) * 5;
+      return bScore - aScore || vehiclePriceSort(a) - vehiclePriceSort(b) || vehiclePayloadLimit(a) - vehiclePayloadLimit(b);
+    });
+  return candidates[0] ?? chooseGeneralFlatbed(vehicles, requiredWeight);
+}
+
+function buildPipeBatchBins(pool: CargoUnit[], vehicles: LoadingVehicle[], options: LoadingPlanOptions) {
+  if (!isPipeBatch(pool)) {
+    return { bins: [] as WorkBin[], rest: pool };
+  }
+  const pipeItems = pool.filter(isPipeCargo);
+  const rest = removeFromPool(pool, pipeItems);
+  const loadingStrategy = options.loadingStrategy ?? 'quoteSafe';
+  const isLargeDiameterPipeBatch = pipeItems.some((item) => Math.max(item.widthCm, item.heightCm) >= activeLoadingRules.pipeBatchLargeDiameterMm);
+  const preferTarpSafe =
+    loadingStrategy === 'quoteSafe' &&
+    isLargeDiameterPipeBatch &&
+    vehicles.some((vehicle) => isTarpVehicle(vehicle) && (!vehicleLengthMm(vehicle) || vehicleLengthMm(vehicle) >= 12_000));
+  const targetWeight = preferTarpSafe
+    ? Math.min(activeLoadingRules.pipeBatchTarpSafeMaxWeightKg, activeLoadingRules.pipeBatchQuoteSafeMaxWeightKg)
+    : loadingStrategy === 'quoteSafe'
+      ? Math.min(activeLoadingRules.pipeBatchQuoteSafeMaxWeightKg, activeLoadingRules.flatbedWeightLimitKg)
+      : activeLoadingRules.flatbedWeightLimitKg;
+
+  const groups: CargoUnit[][] = [];
+  const sorted = [...pipeItems].sort((a, b) => b.weightKg - a.weightKg || b.lengthCm - a.lengthCm || b.widthCm - a.widthCm);
+  for (const item of sorted) {
+    let target: CargoUnit[] | null = null;
+    for (const group of groups) {
+      const nextWeight = sumWeight(group) + item.weightKg;
+      if (nextWeight > targetWeight) continue;
+      if (Math.max(maxLength(group), item.lengthCm) > 12_500 && maxLength(group) !== item.lengthCm) continue;
+      target = group;
+      break;
+    }
+    if (!target) {
+      target = [];
+      groups.push(target);
+    }
+    target.push(item);
+  }
+
+  const bins: WorkBin[] = [];
+  const unhandled: CargoUnit[] = [];
+  for (const group of groups) {
+    const weight = sumWeight(group);
+    const vehicle = choosePipeBatchVehicle(vehicles, Math.min(weight, activeLoadingRules.flatbedWeightLimitKg), preferTarpSafe);
+    if (!vehicle) {
+      unhandled.push(...group);
+      continue;
+    }
+    bins.push({
+      vehicle,
+      method: preferTarpSafe ? '管材篷布大通道保守分组' : '管材批量成捆分层装载',
+      items: group,
+      warnings: [
+        preferTarpSafe
+          ? `大直径管材篷布保守规则：允许堆叠/可摆放只表示同类管材可分层并排，不按车辆载重极限压满；本车装载总长 ${maxLength(group)}mm，单车重量 ${weight.toFixed(2)}kg。`
+          : `管材批量规则：允许堆叠/可摆放表示可成捆分层和并排，不按单根长方体方数拆车；本车装载总长 ${maxLength(group)}mm，单车重量 ${weight.toFixed(2)}kg。`,
+        preferTarpSafe
+          ? '报价稳妥模式按篷布大通道经验重量留余量，目标接近同事 28 台方案；现场需复核管径层数、垫木、防滚、防滑、绑扎和车厢净空。'
+          : '报价阶段按重量留余量，现场需复核管径层数、垫木、防滚、防滑、绑扎和车辆轴荷。',
+      ],
+    });
+  }
+
+  return { bins, rest: [...rest, ...unhandled] };
+}
+
 function canAddToRussiaCostBin(bin: CargoItem[], cargo: CargoItem, vehicle: LoadingVehicle, maxItems: number, maxVolumeCbm: number) {
   const next = [...bin, cargo];
   return (
@@ -986,10 +1187,14 @@ function isRussiaTarpPreferredCargo(cargo: CargoItem) {
 
 function likelySideBySideWidthMm(items: CargoItem[]) {
   const sameHeightBand = [...items]
-    .filter((item) => item.widthCm <= activeLoadingRules.russiaTarpPreferredMaxWidthMm && item.heightCm <= activeLoadingRules.russiaTarpPreferredMaxHeightMm)
-    .sort((a, b) => b.widthCm - a.widthCm || b.weightKg - a.weightKg)
+    .filter(
+      (item) =>
+        placementWidthMm(item) <= activeLoadingRules.russiaTarpPreferredMaxWidthMm &&
+        item.heightCm <= activeLoadingRules.russiaTarpPreferredMaxHeightMm,
+    )
+    .sort((a, b) => placementWidthMm(b) - placementWidthMm(a) || b.weightKg - a.weightKg)
     .slice(0, 2);
-  return sameHeightBand.reduce((sum, item) => sum + item.widthCm, 0);
+  return sameHeightBand.reduce((sum, item) => sum + placementWidthMm(item), 0);
 }
 
 function buildRussiaIndustrialBatchBins(pool: CargoUnit[], vehicles: LoadingVehicle[], options: LoadingPlanOptions) {
@@ -1133,7 +1338,7 @@ function chooseOversizeVehicle(vehicles: LoadingVehicle[], items: CargoItem[]) {
   const width = maxWidth(items);
   const height = items.reduce((max, item) => Math.max(max, item.heightCm), 0);
   const requiredWeight = sumWeight(items);
-  const oversizeVehicles = vehicles.filter(isOversizeVehicle);
+  const oversizeVehicles = vehicles.filter((vehicle) => (items.some(requiresSpecialDeck) ? isSpecialDeckVehicle(vehicle) : isOversizeVehicle(vehicle)));
   const preferred = oversizeVehicles
     .map((vehicle) => {
       let score = vehiclePayloadLimit(vehicle);
@@ -1439,6 +1644,7 @@ function buildFlatbedConsolidationBins(pool: CargoUnit[], vehicles: LoadingVehic
 
 function canAddToTarpBin(bin: CargoItem[], cargo: CargoItem, vehicle: LoadingVehicle, method: string) {
   const next = [...bin, cargo];
+  if (next.some(requiresSpecialDeck)) return false;
   if (sumWeight(next) > vehiclePayloadLimit(vehicle)) return false;
   if (positive(vehicle.effectiveVolume) && sumVolume(next) > positive(vehicle.effectiveVolume) * 1.05) return false;
   const lengthLimit = vehicleLengthMm(vehicle);
@@ -1513,7 +1719,9 @@ function buildFallbackBins(pool: CargoUnit[], vehicles: LoadingVehicle[]) {
   const sorted = [...pool].sort((a, b) => b.weightKg - a.weightKg || b.lengthCm - a.lengthCm);
   for (const item of sorted) {
     const vehicle =
-      chooseVehicle(vehicles, (candidate) => isFlatbedVehicle(candidate) && item.weightKg <= activeLoadingRules.flatbedWeightLimitKg, item.weightKg) ??
+      (!requiresSpecialDeck(item)
+        ? chooseVehicle(vehicles, (candidate) => isFlatbedVehicle(candidate) && item.weightKg <= activeLoadingRules.flatbedWeightLimitKg, item.weightKg)
+        : null) ??
       chooseOversizeVehicle(vehicles, [item]);
     if (!vehicle) {
       continue;
@@ -1534,17 +1742,25 @@ function cargoRiskNotes(cargo: CargoItem, vehicle: LoadingVehicle, method: strin
   const lengthMm = vehicleLengthMm(vehicle);
   const widthMm = vehicleWidthMm(vehicle);
   const heightMm = vehicleHeightMm(vehicle);
+  const placementWidth = placementWidthMm(cargo);
+  const longSide = Math.max(cargo.lengthCm, cargo.widthCm);
   if (isFlatbedVehicle(vehicle) && lengthMm && placementLengthMm(cargo) > lengthMm) {
     notes.push(`超出平板有效长度 ${lengthMm}mm，需申请超长证`);
   }
-  if (widthMm && cargo.widthCm > widthMm) {
-    notes.push(`超出车辆有效宽度 ${widthMm}mm，需复核超宽证或更换车型`);
+  if (requiresSpecialDeck(cargo)) {
+    notes.push(`重量/长度=${deckPressureKgPerMm(cargo).toFixed(2)}kg/mm，超过 ${activeLoadingRules.deckPressureLimitKgPerMm}kg/mm，必须使用特种板`);
+  }
+  if ((isFlatbedVehicle(vehicle) || isSpecialDeckVehicle(vehicle)) && cargo.allowRotate && longSide > activeLoadingRules.rotatedLoadMaxWidthMm) {
+    notes.push(`平板车横置后占宽 ${longSide}mm 超过 ${activeLoadingRules.rotatedLoadMaxWidthMm}mm，不按横置缩短长度处理`);
+  }
+  if (widthMm && placementWidth > widthMm) {
+    notes.push(`摆放占宽 ${placementWidth}mm 超出车辆有效宽度 ${widthMm}mm，需复核超宽证或更换车型`);
   }
   if (heightMm && cargo.heightCm > heightMm) {
     notes.push(`超出车辆有效高度 ${heightMm}mm，需复核限高或更换车型`);
   }
-  if (cargo.widthCm > activeLoadingRules.oversizeWidthMm) {
-    notes.push(`宽度 ${cargo.widthCm}mm，需复核超宽许可`);
+  if (placementWidth > activeLoadingRules.oversizeWidthMm) {
+    notes.push(`摆放占宽 ${placementWidth}mm，需复核超宽许可`);
   }
   if (cargo.heightCm > activeLoadingRules.oversizeHeightMm) {
     notes.push(`高度 ${cargo.heightCm}mm，需复核限高`);
@@ -1585,6 +1801,9 @@ function binToResult(bin: WorkBin): LoadingVehicleResult {
       heightCm: item.heightCm,
       weightKg: item.weightKg,
       volumeCbm: cargoVolume(item),
+      allowRotate: item.allowRotate,
+      allowStack: item.allowStack,
+      remark: item.remark,
       notes: cargoRiskNotes(item, bin.vehicle, bin.method),
     });
   }
@@ -1604,7 +1823,7 @@ function binToResult(bin: WorkBin): LoadingVehicleResult {
     warnings.push(`多件合装总重达到 ${activeLoadingRules.multiCargoRiskSplitWeightKg}kg 以上，接近 44 吨红线，建议拆车或人工确认过磅误差。`);
   }
   if (isTarpVehicle(bin.vehicle)) {
-    const maxCargoWidth = Math.max(...assignments.map((assignment) => Number(assignment.widthCm ?? 0)), 0);
+    const maxCargoWidth = maxWidth(bin.items);
     const maxCargoHeight = Math.max(...assignments.map((assignment) => Number(assignment.heightCm ?? 0)), 0);
     const sideBySideWidth = likelySideBySideWidthMm(bin.items);
     if (maxCargoWidth > activeLoadingRules.russiaTarpPreferredMaxWidthMm || maxCargoHeight > activeLoadingRules.russiaTarpPreferredMaxHeightMm) {
@@ -1645,17 +1864,19 @@ function applyDestinationRules(vehicles: LoadingVehicleResult[], options: Loadin
   return vehicles.map((vehicle) => {
     const warnings = [...vehicle.warnings];
     if (countries.some((country) => country.includes('俄罗斯'))) {
-      const cargoHeightLimit = vehicleHeightMm(vehicle.vehicle);
-      if (cargoHeightLimit) {
-        const maxCargoHeight = Math.max(...vehicle.assignments.map((assignment) => Number(assignment.heightCm ?? 0)), 0);
-        if (maxCargoHeight && maxCargoHeight > cargoHeightLimit) {
-          warnings.push(`俄罗斯规则：车辆+货物总高不得超过 ${activeLoadingRules.russiaMaxVehicleCargoHeightMm}mm；按当前车型有效高度 ${cargoHeightLimit}mm，货物最高 ${maxCargoHeight}mm，需更换车型或重新配载。`);
-        }
-        if (!maxCargoHeight) {
-          warnings.push(`俄罗斯规则：车辆+货物总高不得超过 ${activeLoadingRules.russiaMaxVehicleCargoHeightMm}mm，需结合货物高度和车辆空载高度复核。`);
-        }
+      const maxCargoHeight = Math.max(...vehicle.assignments.map((assignment) => Number(assignment.heightCm ?? 0)), 0);
+      const cargoHeightLimit = activeLoadingRules.russiaCargoHeightLimitMm || 4_200;
+      if (maxCargoHeight && maxCargoHeight > cargoHeightLimit) {
+        warnings.push(`俄罗斯规则：车货总高 ${activeLoadingRules.russiaMaxVehicleCargoHeightMm}mm 扣除车辆高度后，货物有效高度按 ${cargoHeightLimit}mm 控制；当前最高 ${maxCargoHeight}mm，需更换车型或重新配载。`);
+      }
+      if (!maxCargoHeight) {
+        warnings.push(`俄罗斯规则：车货总高不得超过 ${activeLoadingRules.russiaMaxVehicleCargoHeightMm}mm，系统按货物有效高度 ${cargoHeightLimit}mm 复核。`);
+      }
+      const vehicleLimit = vehicleHeightMm(vehicle.vehicle);
+      if (vehicleLimit && maxCargoHeight > vehicleLimit) {
+        warnings.push(`当前车型有效高度 ${vehicleLimit}mm 低于货物最高 ${maxCargoHeight}mm，需复核车型高度配置。`);
       } else {
-        warnings.push(`俄罗斯规则：车辆+货物总高不得超过 ${activeLoadingRules.russiaMaxVehicleCargoHeightMm}mm；当前车型未配置有效高度，需按车辆空载高度+货物高度人工复核。`);
+        warnings.push(`俄罗斯规则：系统按货物有效高度 ${cargoHeightLimit}mm 校验；如车辆实际空载高度不是约 1000mm，需人工复核总高。`);
       }
     }
     return { ...vehicle, warnings: [...new Set(warnings)] };
@@ -1712,19 +1933,23 @@ export function generateLoadingPlan(
 ): LoadingPlan {
   const previousRules = activeLoadingRules;
   activeLoadingRules = resolveLoadingRules(options.loadingRules);
+  const loadingStrategy = options.loadingStrategy ?? 'quoteSafe';
   try {
     const units = expandCargo(cargoItems);
-    const automotiveBatch = buildAutomotiveBatchBins(units, selectedVehicles);
-    const mixedLongProject = buildMixedLongOversizeProjectBins(automotiveBatch.rest, selectedVehicles, options);
-    const russiaLongCargoBatch = buildRussiaLongCargoBins(mixedLongProject.rest, selectedVehicles, options);
-    const russiaIndustrialBatch = buildRussiaIndustrialBatchBins(russiaLongCargoBatch.rest, selectedVehicles, options);
-    const russiaCostBatch = buildRussiaCostOptimizedBins(russiaIndustrialBatch.rest, selectedVehicles, options);
-    const projectBatch = buildProjectBatchBins(russiaCostBatch.rest, selectedVehicles);
-    const oversize = buildOversizeBins(projectBatch.rest, selectedVehicles);
-    const flatbed = buildFlatbedConsolidationBins(oversize.rest, selectedVehicles);
-    const tarp = buildTarpBins(flatbed.rest, selectedVehicles);
-    const fallback = buildFallbackBins(tarp.rest, selectedVehicles);
+    const strategyVehicles = prepareVehiclesForStrategy(selectedVehicles, options);
+    const pipeBatch = buildPipeBatchBins(units, strategyVehicles, options);
+    const automotiveBatch = buildAutomotiveBatchBins(pipeBatch.rest, strategyVehicles);
+    const mixedLongProject = buildMixedLongOversizeProjectBins(automotiveBatch.rest, strategyVehicles, options);
+    const russiaLongCargoBatch = buildRussiaLongCargoBins(mixedLongProject.rest, strategyVehicles, options);
+    const russiaIndustrialBatch = buildRussiaIndustrialBatchBins(russiaLongCargoBatch.rest, strategyVehicles, options);
+    const russiaCostBatch = buildRussiaCostOptimizedBins(russiaIndustrialBatch.rest, strategyVehicles, options);
+    const projectBatch = buildProjectBatchBins(russiaCostBatch.rest, strategyVehicles);
+    const oversize = buildOversizeBins(projectBatch.rest, strategyVehicles);
+    const flatbed = buildFlatbedConsolidationBins(oversize.rest, strategyVehicles);
+    const tarp = buildTarpBins(flatbed.rest, strategyVehicles);
+    const fallback = buildFallbackBins(tarp.rest, strategyVehicles);
     const bins = [
+      ...pipeBatch.bins,
       ...automotiveBatch.bins,
       ...mixedLongProject.bins,
       ...russiaLongCargoBatch.bins,
@@ -1765,6 +1990,9 @@ export function generateLoadingPlan(
         vehicleCount: vehicles.length,
       },
       notes: [
+        loadingStrategy === 'quoteSafe'
+          ? '当前策略：报价稳妥。配载不压极限，接近重量、长度、宽度、高度红线时优先拆车，避免实际执行装不下或车源涨价导致亏损。'
+          : '当前策略：执行优化。允许在人工复核车辆、证件、线路、绑扎和现场摆放后压缩车数，系统仍会保留高风险提醒。',
         `当前规则：项目批量货物优先按 17米5轴平板矩阵摆放；不可摆放表示不能被压，不影响同车并排；空白要求默认允许叠放；除非单件且不可拆分，否则单车总重不能超过 ${activeLoadingRules.indivisibleSingleVehicleKg}kg；单件超过 ${activeLoadingRules.indivisibleSingleVehicleKg}kg 的不可拆分货物必须单独一车。`,
         `多件合装重量规则：总重 ${activeLoadingRules.multiCargoRiskSplitWeightKg}kg 以上提示高风险，总重达到 ${activeLoadingRules.multiCargoHardSplitWeightKg}kg 时不再自动合车，优先拆车。`,
         '汽车大批量件规则：按同事方案沉淀，先按宽高等级分组；超宽件线性排布，普通件按面积折算长度，目标控制 17 米左右车组和整票总成本。',
@@ -1772,9 +2000,12 @@ export function generateLoadingPlan(
         '俄罗斯工业件规则：宽 3000-3200mm、高约 3250mm 且重量可控时，优先 17米6轴平板办理超限证；窄小重货优先 6轴篷布集中。',
         '俄罗斯篷布边界规则：宽 2400mm 左右、高 2500mm 内优先篷布；宽 3100mm+ 或高 3200mm+ 优先平板；篷布并排估算宽度超过 3300mm 必须改平板或人工复核。',
         '俄罗斯长货批量规则：不经过乌兹别克时，24 米以上窄长货按同长度段、累计宽度约 3000mm 合装超限车；超过 44 吨时强制提示人工复核。',
+        '俄罗斯超限合装成本规则：到俄罗斯且不经过乌兹别克时，可将多件宽高重货集中到一台超限车办理，剩余普通货优先用 13.6米6轴平板压缩车数；必须复核轴荷、证件、路线、绑扎和车辆承载等级。',
         '本次升级：装载方案按整票总体成本评估，不按单台车成本贪心选择；中等大件优先尝试 17米6轴平板并车减少总车辆数，剩余小件再用篷布车收尾。',
         isRussiaDestination(options) ? '俄罗斯成本规则：先拆出宽货/高货/长货平板处理，其余优先低成本篷布车；宽度 2500mm 以上和高度 3300mm 以上自动标记复核超限费或车货总高。' : '',
-        (options.destinationCountries ?? [options.destinationCountry]).some((country) => country === '俄罗斯') ? `国家规则：俄罗斯车辆+货物总高不得超过 ${(activeLoadingRules.russiaMaxVehicleCargoHeightMm / 1000).toFixed(1)} 米；车型有效高度建议按“总高上限-车辆空载高度/板高”维护，用于系统自动校验。` : '',
+        (options.destinationCountries ?? [options.destinationCountry]).some((country) => country === '俄罗斯') ? `国家规则：俄罗斯车辆+货物总高不得超过 ${(activeLoadingRules.russiaMaxVehicleCargoHeightMm / 1000).toFixed(1)} 米；系统按货物有效高度 ${(activeLoadingRules.russiaCargoHeightLimitMm / 1000).toFixed(1)} 米自动校验。` : '',
+        `受力规则：货物重量/承载长度超过 ${activeLoadingRules.deckPressureLimitKgPerMm}kg/mm 时，普通平板木底板受力不足，必须使用特种板。`,
+        `平板车旋转横置规则：普通平板车、特种平板车横置后的占车宽不得超过 ${activeLoadingRules.rotatedLoadMaxWidthMm}mm；超过则不按横置方案缩短装载长度。`,
       ].filter(Boolean),
     };
   } finally {

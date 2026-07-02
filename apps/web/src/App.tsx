@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useState } from 'react';
+﻿import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import {
   Alert,
   Avatar,
@@ -41,6 +41,7 @@ import {
   DollarCircleOutlined,
   DownloadOutlined,
   EditOutlined,
+  EnvironmentOutlined,
   EyeOutlined,
   FileExcelOutlined,
   FileTextOutlined,
@@ -56,6 +57,16 @@ import {
   TeamOutlined,
   UploadOutlined,
 } from '@ant-design/icons';
+import {
+  CartesianGrid,
+  Legend,
+  Line,
+  LineChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from 'recharts';
 import { apiRequest } from './api/client';
 import { clearSession, getSessionUser, getToken, saveSession, type SessionUser } from './api/auth';
 import { formatBeijingTime } from './utils/date';
@@ -69,15 +80,19 @@ import {
   type LoadingAssignment,
   type LoadingPlan,
 } from './services/loadingPlan';
-import { CustomerManagementPage, SupplierManagementPage, type ManagedCustomer } from './pages/CustomerSupplierPages';
+import { CustomerManagementPage, SupplierDriverListPage, SupplierManagementPage, type ManagedCustomer } from './pages/CustomerSupplierPages';
 import { DashboardPage } from './pages/DashboardPage';
+import { ExecutiveDashboardPage } from './pages/ExecutiveDashboardPage';
 import { FinancePage } from './pages/FinancePage';
 import { OversizeProjectManagementPage, OversizeTaskManagementPage } from './pages/OversizeProjectManagementPage';
+import { TaskDashboardPage } from './pages/TaskDashboardPage';
+import { TaskMapPage } from './pages/TaskMapPage';
 import { TrackingPage } from './pages/TrackingPage';
 import { EmployeeRoleSelect, PermissionManagementPage } from './pages/PermissionManagementPage';
 import { WorkflowTemplatePage, WorkflowTodoPage } from './pages/WorkflowManagementPages';
 import { MobileWorkflowPage } from './pages/MobileWorkflowPage';
 import { LoadingPlan3DPreview } from './components/LoadingPlan3DPreview';
+import { StateMachinePage } from './pages/StateMachinePage';
 
 const { Header, Content, Sider } = Layout;
 const { Title, Text, Paragraph } = Typography;
@@ -85,21 +100,48 @@ const { TextArea } = Input;
 
 type SectionKey =
   | 'home'
+  | 'executiveDashboard'
   | 'plans'
   | 'inquiries'
+  | 'inquiryTasks'
   | 'loading'
+  | 'smartLoading'
   | 'oversizeProjects'
   | 'oversizeTasks'
+  | 'taskDashboard'
+  | 'taskMap'
   | 'tracking'
   | 'driverCheckpoints'
   | 'marketInfo'
+  | 'vehicleQuotes'
   | 'workflowTemplates'
+  | 'stateMachine'
   | 'workflowTodos'
   | 'finance'
+  | 'financeReceivables'
+  | 'financePayables'
+  | 'financeBills'
+  | 'financePayments'
   | 'customers'
   | 'suppliers'
+  | 'supplierDrivers'
   | 'baseInfo'
   | 'permissions';
+
+type SidebarLeafItem = {
+  key: SectionKey;
+  icon: ReactNode;
+  label: string;
+};
+
+type SidebarGroupItem = {
+  key: string;
+  icon: ReactNode;
+  label: string;
+  children: SidebarLeafItem[];
+};
+
+type SidebarItem = SidebarLeafItem | SidebarGroupItem;
 
 type Customer = {
   id: string;
@@ -141,9 +183,30 @@ type VehicleType = {
   effectiveHeight?: number | null;
   effectiveVolume?: number | null;
   payloadWeight?: number | null;
+  tareWeight?: number | null;
+  isClosed?: boolean | number | null;
   priceSort?: number | null;
   priceWeight?: number | null;
   scenario?: string | null;
+  photoFiles?: CargoFile[] | string | null;
+  vehiclePhotoUploadFiles?: UploadFile[];
+  createdAt: string;
+  updatedAt: string;
+};
+
+type VehicleTypeQuote = {
+  id: string;
+  quoteBatch: string;
+  quoteDate: string;
+  originCountry: string;
+  originCity: string;
+  destinationCountry: string;
+  destinationCity: string;
+  vehicleTypeId?: string | null;
+  vehicleTypeName: string;
+  price: number;
+  currency: string;
+  remark?: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -164,6 +227,42 @@ type LoadingRule = {
   updatedAt: string;
 };
 
+type WorkingTimePeriod = {
+  id?: string;
+  weekday: number;
+  startTime: string;
+  endTime: string;
+};
+
+type WorkingTimeRule = {
+  id: string;
+  name: string;
+  country?: string | null;
+  location?: string | null;
+  nodeName?: string | null;
+  timezone: string;
+  enabled: boolean;
+  remark?: string | null;
+  periods: WorkingTimePeriod[];
+  createdAt: string;
+  updatedAt: string;
+};
+
+type WorkingCalendarDay = {
+  id: string;
+  country?: string | null;
+  location?: string | null;
+  date: string;
+  dayType: string;
+  name?: string | null;
+  allDay: boolean;
+  periods?: { startTime: string; endTime: string }[];
+  enabled: boolean;
+  remark?: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
 type LoadingAiConfig = {
   id: string;
   provider: string;
@@ -178,6 +277,53 @@ type LoadingAiConfig = {
   apiKeyMasked?: string;
   keySource?: string;
   updatedAt?: string;
+};
+
+type ExchangeRate = {
+  id: string;
+  currencyCode: string;
+  currencyName?: string | null;
+  rateToCny: number;
+  source?: string | null;
+  syncedAt?: string | null;
+  enabled: boolean;
+  remark?: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+type GpsProvider = {
+  id: string;
+  shortName: string;
+  name: string;
+  website?: string | null;
+  phone?: string | null;
+  apiUrl?: string | null;
+  apiKey?: string | null;
+  apiToken?: string | null;
+  username?: string | null;
+  passwordMd5?: string | null;
+  hasPasswordMd5?: boolean;
+  loginToken?: string | null;
+  serverId?: string | null;
+  tokenExpiresAt?: string | null;
+  lastQueryPositionTime?: number | null;
+  enabled: boolean;
+  remark?: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+type MapConfig = {
+  id: string;
+  provider: string;
+  amapWebKey?: string | null;
+  amapRestKey?: string | null;
+  amapSecurityJsCode?: string | null;
+  enabled: boolean;
+  remark?: string | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
 };
 
 type TransportPlan = {
@@ -208,6 +354,14 @@ type LoadingPlanRecord = {
   status: string;
   createdAt: string;
   updatedAt: string;
+};
+
+type SmartLoadingCandidate = {
+  key: string;
+  name: string;
+  description: string;
+  riskCount: number;
+  plan: LoadingPlan;
 };
 
 type MarketInfo = {
@@ -281,6 +435,54 @@ type TransportInquiry = {
   plans: TransportPlan[];
 };
 
+type InquiryTaskLog = {
+  id: string;
+  taskId: string;
+  action: string;
+  fromStatus?: string | null;
+  toStatus?: string | null;
+  operatorId?: string | null;
+  operatorName?: string | null;
+  remark?: string | null;
+  createdAt?: string | null;
+};
+
+type InquiryTask = {
+  id: string;
+  taskNo: string;
+  customerId?: string | null;
+  customerName: string;
+  salespersonId?: string | null;
+  salespersonName?: string | null;
+  serviceItems?: string[];
+  contactName?: string | null;
+  contactPhone?: string | null;
+  cargoName: string;
+  cargoType?: string | null;
+  origin: string;
+  destination: string;
+  weightKg?: number | null;
+  volumeCbm?: number | null;
+  packageCount?: number | null;
+  readyDate?: string | null;
+  targetArrivalDate?: string | null;
+  customsMode?: string | null;
+  temperatureRequirement?: string | null;
+  specialRequirement?: string | null;
+  cargoFiles?: CargoFile[];
+  quoteAmount?: number | null;
+  quoteCurrency?: string | null;
+  quoteRemark?: string | null;
+  quoteFiles?: CargoFile[];
+  solutionFiles?: CargoFile[];
+  generatedInquiryId?: string | null;
+  generatedInquiryNo?: string | null;
+  status: string;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+  logs?: InquiryTaskLog[];
+};
+
 const statusMeta: Record<string, { text: string; color: string }> = {
   NEW: { text: '待报价', color: 'gold' },
   PLAN_READY: { text: '已生成方案', color: 'green' },
@@ -320,7 +522,7 @@ function fileUrl(value: string) {
   if (value.startsWith('http')) {
     return value;
   }
-  const configuredApiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? 'http://127.0.0.1:8787';
+  const configuredApiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? 'https://api.ostoa.org';
   const isLocalBrowser =
     typeof window !== 'undefined' &&
     (window.location.hostname === '127.0.0.1' ||
@@ -358,35 +560,61 @@ export default function App() {
   if (typeof window !== 'undefined' && window.location.pathname.startsWith('/mobile/workflow')) {
     return <MobileWorkflowPage />;
   }
+  if (typeof window !== 'undefined' && window.location.pathname.startsWith('/mobile/executive-dashboard')) {
+    return <ExecutiveDashboardPage mobile />;
+  }
 
   const [loginForm] = Form.useForm();
   const [inquiryForm] = Form.useForm();
+  const [inquiryTaskForm] = Form.useForm();
+  const [inquiryTaskQuoteForm] = Form.useForm();
+  const [inquiryTaskConfirmForm] = Form.useForm();
   const [planForm] = Form.useForm();
   const [quoteForm] = Form.useForm();
   const [employeeForm] = Form.useForm();
   const [vehicleTypeForm] = Form.useForm();
+  const [vehicleQuoteForm] = Form.useForm();
   const [loadingRuleForm] = Form.useForm();
+  const [workingTimeRuleForm] = Form.useForm();
+  const [workingCalendarForm] = Form.useForm();
   const [loadingAiConfigForm] = Form.useForm();
+  const [exchangeRateForm] = Form.useForm();
+  const [gpsProviderForm] = Form.useForm();
+  const [mapConfigForm] = Form.useForm();
   const [cargoForm] = Form.useForm();
   const [sessionUser, setSessionUser] = useState<SessionUser | null>(getSessionUser());
+  const quoteDestinationCountry = Form.useWatch('destinationCountry', vehicleQuoteForm);
   const [activeSection, setActiveSection] = useState<SectionKey>('home');
   const [siderCollapsed, setSiderCollapsed] = useState(false);
+  const [openSidebarKeys, setOpenSidebarKeys] = useState<string[]>([]);
   const [taskOpenRequest, setTaskOpenRequest] = useState<{ taskId: string; nodeId?: string | null; requestId: number } | null>(null);
   const [loading, setLoading] = useState(Boolean(getToken()));
   const [loginLoading, setLoginLoading] = useState(false);
+  const [refreshingDriverAddresses, setRefreshingDriverAddresses] = useState(false);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [marketInfos, setMarketInfos] = useState<MarketInfo[]>([]);
   const [driverCheckpoints, setDriverCheckpoints] = useState<DriverCheckpoint[]>([]);
   const [vehicleTypes, setVehicleTypes] = useState<VehicleType[]>([]);
+  const [vehicleTypeQuotes, setVehicleTypeQuotes] = useState<VehicleTypeQuote[]>([]);
   const [loadingRuleConfigs, setLoadingRuleConfigs] = useState<LoadingRule[]>([]);
+  const [workingTimeRules, setWorkingTimeRules] = useState<WorkingTimeRule[]>([]);
+  const [workingCalendarDays, setWorkingCalendarDays] = useState<WorkingCalendarDay[]>([]);
   const [loadingAiConfig, setLoadingAiConfig] = useState<LoadingAiConfig | null>(null);
+  const [exchangeRates, setExchangeRates] = useState<ExchangeRate[]>([]);
+  const [gpsProviders, setGpsProviders] = useState<GpsProvider[]>([]);
+  const [mapConfig, setMapConfig] = useState<MapConfig | null>(null);
   const [inquiries, setInquiries] = useState<TransportInquiry[]>([]);
   const [plans, setPlans] = useState<TransportPlan[]>([]);
   const [loadingPlans, setLoadingPlans] = useState<LoadingPlanRecord[]>([]);
   const [cargoItems, setCargoItems] = useState<CargoItem[]>([]);
-  const [loadingDestinationCountries, setLoadingDestinationCountries] = useState<string[]>(['哈萨克斯坦']);
+  const [loadingDestinationCountries, setLoadingDestinationCountries] = useState<string[]>([]);
+  const [loadingStrategy, setLoadingStrategy] = useState<'quoteSafe' | 'executionOptimized'>('quoteSafe');
   const [loadingPlan, setLoadingPlan] = useState<LoadingPlan | null>(null);
+  const [activeSmartLoadingStep, setActiveSmartLoadingStep] = useState('cargo');
+  const [smartLoadingCandidates, setSmartLoadingCandidates] = useState<SmartLoadingCandidate[]>([]);
+  const [selectedSmartLoadingKey, setSelectedSmartLoadingKey] = useState<string | null>(null);
+  const [smartLoadingPreview, setSmartLoadingPreview] = useState<SmartLoadingCandidate | null>(null);
   const [editingCargo, setEditingCargo] = useState<CargoItem | null>(null);
   const [inquiryDrawerOpen, setInquiryDrawerOpen] = useState(false);
   const [detailDrawerOpen, setDetailDrawerOpen] = useState(false);
@@ -395,7 +623,13 @@ export default function App() {
   const [employeeModalOpen, setEmployeeModalOpen] = useState(false);
   const [vehicleTypeModalOpen, setVehicleTypeModalOpen] = useState(false);
   const [loadingRuleModalOpen, setLoadingRuleModalOpen] = useState(false);
+  const [workingTimeRuleModalOpen, setWorkingTimeRuleModalOpen] = useState(false);
+  const [workingCalendarModalOpen, setWorkingCalendarModalOpen] = useState(false);
   const [loadingAiConfigModalOpen, setLoadingAiConfigModalOpen] = useState(false);
+  const [exchangeRateModalOpen, setExchangeRateModalOpen] = useState(false);
+  const [syncingExchangeRates, setSyncingExchangeRates] = useState(false);
+  const [gpsProviderModalOpen, setGpsProviderModalOpen] = useState(false);
+  const [testingGpsProvider, setTestingGpsProvider] = useState(false);
   const [cargoModalOpen, setCargoModalOpen] = useState(false);
   const [savingLoadingPlan, setSavingLoadingPlan] = useState(false);
   const [activeLoadingStep, setActiveLoadingStep] = useState('cargo');
@@ -403,6 +637,7 @@ export default function App() {
   const [loadingPlanUploadFiles, setLoadingPlanUploadFiles] = useState<UploadFile[]>([]);
   const [selectedLoadingPlanRecord, setSelectedLoadingPlanRecord] = useState<LoadingPlanRecord | null>(null);
   const [previewLoadingVehicle, setPreviewLoadingVehicle] = useState<{ vehicle: LoadingPlan['vehicles'][number]; index: number } | null>(null);
+  const [vehiclePhotoPreview, setVehiclePhotoPreview] = useState<{ title: string; files: CargoFile[] } | null>(null);
   const [aiOptimizeOpen, setAiOptimizeOpen] = useState(false);
   const [aiOptimizeLoading, setAiOptimizeLoading] = useState(false);
   const [aiManualPlanText, setAiManualPlanText] = useState('');
@@ -412,9 +647,36 @@ export default function App() {
   const [editingInquiry, setEditingInquiry] = useState<TransportInquiry | null>(null);
   const [editingEmployee, setEditingEmployee] = useState<Employee | null>(null);
   const [editingVehicleType, setEditingVehicleType] = useState<VehicleType | null>(null);
+  const [editingVehicleQuote, setEditingVehicleQuote] = useState<VehicleTypeQuote | null>(null);
+  const [quoteTrendRoute, setQuoteTrendRoute] = useState<VehicleTypeQuote | null>(null);
+  const [vehicleQuoteModalOpen, setVehicleQuoteModalOpen] = useState(false);
+  const [vehicleQuoteFilters, setVehicleQuoteFilters] = useState({
+    quoteBatch: '',
+    destinationCountry: '',
+    destinationCity: '',
+    vehicleTypeName: '',
+  });
+  const [vehicleTypeFilters, setVehicleTypeFilters] = useState({
+    name: '',
+  });
   const [editingLoadingRule, setEditingLoadingRule] = useState<LoadingRule | null>(null);
+  const [editingWorkingTimeRule, setEditingWorkingTimeRule] = useState<WorkingTimeRule | null>(null);
+  const [editingWorkingCalendarDay, setEditingWorkingCalendarDay] = useState<WorkingCalendarDay | null>(null);
+  const [editingExchangeRate, setEditingExchangeRate] = useState<ExchangeRate | null>(null);
+  const [editingGpsProvider, setEditingGpsProvider] = useState<GpsProvider | null>(null);
 
   const can = (code: string) => sessionUser?.roleCode === 'ADMIN' || Boolean(sessionUser?.permissions?.includes(code));
+
+  const normalizeCargoFiles = (files?: CargoFile[] | string | null): CargoFile[] => {
+    if (Array.isArray(files)) return files;
+    if (!files) return [];
+    try {
+      const parsed = JSON.parse(files);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  };
 
   const stats = useMemo(() => {
     const waiting = inquiries.filter((item) => item.status === 'NEW').length;
@@ -434,14 +696,37 @@ export default function App() {
   const loadData = async () => {
     setLoading(true);
     try {
-      const [customerRes, inquiryRes, planRes, employeeRes, vehicleTypeRes, loadingRuleRes, loadingAiConfigRes, loadingPlanRes, marketInfoRes, driverCheckpointRes] = await Promise.all([
+      const [
+        customerRes,
+        inquiryRes,
+        planRes,
+        employeeRes,
+        vehicleTypeRes,
+        vehicleTypeQuoteRes,
+        loadingRuleRes,
+        workingTimeRuleRes,
+        workingCalendarDayRes,
+        loadingAiConfigRes,
+        exchangeRateRes,
+        gpsProviderRes,
+        mapConfigRes,
+        loadingPlanRes,
+        marketInfoRes,
+        driverCheckpointRes,
+      ] = await Promise.all([
         apiRequest<{ items: Customer[] }>('/api/customers'),
         apiRequest<{ items: TransportInquiry[] }>('/api/transport-inquiries'),
         apiRequest<{ items: TransportPlan[] }>('/api/transport-plans'),
         apiRequest<{ items: Employee[] }>('/api/employees'),
         apiRequest<{ items: VehicleType[] }>('/api/vehicle-types'),
+        apiRequest<{ items: VehicleTypeQuote[] }>('/api/vehicle-type-quotes'),
         apiRequest<{ items: LoadingRule[] }>('/api/loading-rules'),
+        apiRequest<{ items: WorkingTimeRule[] }>('/api/working-time-rules'),
+        apiRequest<{ items: WorkingCalendarDay[] }>('/api/working-calendar-days'),
         apiRequest<LoadingAiConfig>('/api/loading-ai-config'),
+        apiRequest<{ items: ExchangeRate[] }>('/api/exchange-rates'),
+        apiRequest<{ items: GpsProvider[] }>('/api/gps-providers'),
+        apiRequest<MapConfig>('/api/map-config'),
         apiRequest<{ items: LoadingPlanRecord[] }>('/api/loading-plans'),
         apiRequest<{ items: MarketInfo[] }>('/api/market-info'),
         apiRequest<{ items: DriverCheckpoint[] }>('/api/driver/checkpoints'),
@@ -451,8 +736,22 @@ export default function App() {
       setPlans(planRes.items ?? []);
       setEmployees(employeeRes.items ?? []);
       setVehicleTypes(vehicleTypeRes.items ?? []);
+      setVehicleTypeQuotes(vehicleTypeQuoteRes.items ?? []);
       setLoadingRuleConfigs(loadingRuleRes.items ?? []);
+      setWorkingTimeRules(workingTimeRuleRes.items ?? []);
+      setWorkingCalendarDays(workingCalendarDayRes.items ?? []);
       setLoadingAiConfig(loadingAiConfigRes);
+      setExchangeRates(exchangeRateRes.items ?? []);
+      setGpsProviders(gpsProviderRes.items ?? []);
+      setMapConfig(mapConfigRes);
+      mapConfigForm.setFieldsValue({
+        provider: mapConfigRes.provider || 'amap',
+        amapWebKey: mapConfigRes.amapWebKey || '',
+        amapRestKey: mapConfigRes.amapRestKey || '',
+        amapSecurityJsCode: mapConfigRes.amapSecurityJsCode || '',
+        enabled: mapConfigRes.enabled,
+        remark: mapConfigRes.remark || '',
+      });
       setLoadingPlans(loadingPlanRes.items ?? []);
       setMarketInfos(marketInfoRes.items ?? []);
       setDriverCheckpoints(driverCheckpointRes.items ?? []);
@@ -464,6 +763,17 @@ export default function App() {
   };
 
   useEffect(() => {
+    const onTaskDashboardFullscreen = (event: Event) => {
+      const detail = (event as CustomEvent<{ fullscreen?: boolean }>).detail;
+      if (detail?.fullscreen) {
+        setSiderCollapsed(true);
+      }
+    };
+    window.addEventListener('ostoa:task-dashboard-fullscreen', onTaskDashboardFullscreen);
+    return () => window.removeEventListener('ostoa:task-dashboard-fullscreen', onTaskDashboardFullscreen);
+  }, []);
+
+  useEffect(() => {
     if (getToken()) {
       void apiRequest<{ user: SessionUser }>('/api/auth/me')
         .then((result) => {
@@ -471,10 +781,25 @@ export default function App() {
             setSessionUser(result.user);
             const token = getToken();
             if (token) saveSession(token, result.user);
+            void loadData();
           }
         })
-        .finally(() => void loadData());
+        .catch(() => {
+          setSessionUser(null);
+          setLoading(false);
+        });
     }
+  }, []);
+
+  useEffect(() => {
+    const handleSessionCleared = () => {
+      setSessionUser(null);
+      setLoading(false);
+      setInquiries([]);
+      setPlans([]);
+    };
+    window.addEventListener('ostoa-session-cleared', handleSessionCleared);
+    return () => window.removeEventListener('ostoa-session-cleared', handleSessionCleared);
   }, []);
 
   const login = async (values: { email: string; password: string }) => {
@@ -659,6 +984,10 @@ export default function App() {
     setLoadingPlan(null);
     setLoadingPlanSaved(false);
     setActiveLoadingStep('cargo');
+    setSmartLoadingCandidates([]);
+    setSelectedSmartLoadingKey(null);
+    setSmartLoadingPreview(null);
+    setActiveSmartLoadingStep('cargo');
   };
 
   const copyCargo = (record: CargoItem) => {
@@ -667,6 +996,10 @@ export default function App() {
     setLoadingPlan(null);
     setLoadingPlanSaved(false);
     setActiveLoadingStep('cargo');
+    setSmartLoadingCandidates([]);
+    setSelectedSmartLoadingKey(null);
+    setSmartLoadingPreview(null);
+    setActiveSmartLoadingStep('cargo');
   };
 
   const deleteCargo = (record: CargoItem) => {
@@ -674,6 +1007,10 @@ export default function App() {
     setLoadingPlan(null);
     setLoadingPlanSaved(false);
     setActiveLoadingStep('cargo');
+    setSmartLoadingCandidates([]);
+    setSelectedSmartLoadingKey(null);
+    setSmartLoadingPreview(null);
+    setActiveSmartLoadingStep('cargo');
   };
 
   const downloadCargoTemplate = () => {
@@ -783,6 +1120,10 @@ export default function App() {
       setLoadingPlan(null);
       setLoadingPlanSaved(false);
       setActiveLoadingStep('cargo');
+      setSmartLoadingCandidates([]);
+      setSelectedSmartLoadingKey(null);
+      setSmartLoadingPreview(null);
+      setActiveSmartLoadingStep('cargo');
       message.success(`已导入 ${imported.length} 条货物`);
     } catch (error) {
       message.error(`导入失败：${(error as Error).message}`);
@@ -790,9 +1131,103 @@ export default function App() {
     return Upload.LIST_IGNORE;
   };
 
+  const selectedLoadingRules = () =>
+    loadingRuleConfigs
+      .filter((rule) => {
+        const countries = rule.applicableCountries ?? [];
+        return !countries.length || countries.some((country) => loadingDestinationCountries.includes(country));
+      })
+      .map((rule) => ({
+        ruleCode: rule.ruleCode,
+        ruleValue: rule.ruleValue,
+        valueType: rule.valueType,
+        enabled: rule.enabled,
+        applicableCountries: rule.applicableCountries,
+      }));
+
+  const loadingPlanRiskCount = (plan: LoadingPlan) =>
+    plan.unassigned.length +
+    plan.vehicles.reduce(
+      (sum, vehicle) =>
+        sum +
+        vehicle.warnings.length +
+        vehicle.assignments.reduce((inner, assignment) => inner + assignment.notes.length, 0),
+      0,
+    );
+
+  const smartLoadingStrategyConfigs = [
+    {
+      key: 'quoteSafe',
+      name: '方案1：报价稳妥',
+      description: '不压极限，接近红线优先拆车，适合报价阶段。',
+      loadingStrategy: 'quoteSafe' as const,
+      vehiclePreference: 'default' as const,
+    },
+    {
+      key: 'minVehicles',
+      name: '方案2：最低车辆数',
+      description: '优先使用承载更大的车型，适合执行阶段人工复核后压缩车数。',
+      loadingStrategy: 'executionOptimized' as const,
+      vehiclePreference: 'maxCapacity' as const,
+    },
+    {
+      key: 'minPriceWeight',
+      name: '方案3：最低价格权重',
+      description: '同等可行条件下优先低权重车型，关注整票成本。',
+      loadingStrategy: 'quoteSafe' as const,
+      vehiclePreference: 'lowestPriceWeight' as const,
+    },
+    {
+      key: 'flatbedFirst',
+      name: '方案4：平板优先',
+      description: '优先普通平板/特种平板，适合宽高风险较多的货物。',
+      loadingStrategy: 'quoteSafe' as const,
+      vehiclePreference: 'flatbedFirst' as const,
+    },
+    {
+      key: 'tarpFirst',
+      name: '方案5：篷布优先',
+      description: '优先篷布车，适合普通货和成本敏感场景。',
+      loadingStrategy: 'quoteSafe' as const,
+      vehiclePreference: 'tarpFirst' as const,
+    },
+    {
+      key: 'safeMaxCapacity',
+      name: '方案6：承载优先稳妥',
+      description: '报价稳妥前提下优先大承载车型，降低超载和装不下风险。',
+      loadingStrategy: 'quoteSafe' as const,
+      vehiclePreference: 'maxCapacity' as const,
+    },
+    {
+      key: 'maxClearance',
+      name: '方案7：装载最宽松',
+      description: '优先有效长宽高和方数余量最大的车型，适合报价阶段保守兜底。',
+      loadingStrategy: 'quoteSafe' as const,
+      vehiclePreference: 'maxClearance' as const,
+    },
+    {
+      key: 'executionFlatbed',
+      name: '方案8：执行平板压缩',
+      description: '执行优化策略下优先平板车型，适合现场复核后压缩车数。',
+      loadingStrategy: 'executionOptimized' as const,
+      vehiclePreference: 'flatbedFirst' as const,
+    },
+    {
+      key: 'executionTarp',
+      name: '方案9：执行篷布压缩',
+      description: '执行优化策略下优先篷布车型，适合普通货现场复核后降成本。',
+      loadingStrategy: 'executionOptimized' as const,
+      vehiclePreference: 'tarpFirst' as const,
+    },
+  ];
+
   const runLoadingPlan = () => {
     if (!cargoItems.length) {
       message.warning('请先新增或导入货物信息');
+      return;
+    }
+    if (!loadingDestinationCountries.length) {
+      message.warning('请先选择途经/目的国家，否则无法匹配对应线路规则');
       return;
     }
     if (!vehicleTypes.length) {
@@ -802,23 +1237,51 @@ export default function App() {
     setLoadingPlan(
       generateLoadingPlan(cargoItems, vehicleTypes, {
         destinationCountries: loadingDestinationCountries,
-        loadingRules: loadingRuleConfigs
-          .filter((rule) => {
-            const countries = rule.applicableCountries ?? [];
-            return !countries.length || countries.some((country) => loadingDestinationCountries.includes(country));
-          })
-          .map((rule) => ({
-            ruleCode: rule.ruleCode,
-            ruleValue: rule.ruleValue,
-            valueType: rule.valueType,
-            enabled: rule.enabled,
-            applicableCountries: rule.applicableCountries,
-          })),
+        loadingStrategy,
+        loadingRules: selectedLoadingRules(),
       }),
     );
     setLoadingPlanSaved(false);
     setActiveLoadingStep('result');
     message.success('配载方案已生成，可进入第二步调整');
+  };
+
+  const runSmartLoadingPlans = () => {
+    if (!cargoItems.length) {
+      message.warning('请先新增或导入货物信息');
+      return;
+    }
+    if (!loadingDestinationCountries.length) {
+      message.warning('请先选择途经/目的国家，否则无法匹配对应线路规则');
+      return;
+    }
+    if (!vehicleTypes.length) {
+      message.warning('系统中还没有可用于自动匹配的车型数据');
+      return;
+    }
+    const candidates = smartLoadingStrategyConfigs.map((strategy) => {
+      const plan = generateLoadingPlan(cargoItems, vehicleTypes, {
+        title: strategy.name,
+        destinationCountries: loadingDestinationCountries,
+        loadingStrategy: strategy.loadingStrategy,
+        vehiclePreference: strategy.vehiclePreference,
+        loadingRules: selectedLoadingRules(),
+      });
+      return {
+        key: strategy.key,
+        name: strategy.name,
+        description: strategy.description,
+        riskCount: loadingPlanRiskCount(plan),
+        plan,
+      };
+    });
+    setSmartLoadingCandidates(candidates);
+    setSelectedSmartLoadingKey(candidates[0]?.key ?? null);
+    setSmartLoadingPreview(null);
+    setLoadingPlan(candidates[0]?.plan ?? null);
+    setLoadingPlanSaved(false);
+    setActiveSmartLoadingStep('result');
+    message.success(`已生成 ${candidates.length} 个智能配载候选方案`);
   };
 
   const recalculateLoadingPlan = (plan: LoadingPlan): LoadingPlan => {
@@ -865,6 +1328,54 @@ export default function App() {
       grouped.set(key, existing);
     }
     return [...grouped.entries()].map(([name, value]) => ({ name, ...value }));
+  };
+
+  const loadingRuleNumber = (ruleCode: string, fallback: number) => {
+    const rule = loadingRuleConfigs.find((item) => item.ruleCode === ruleCode && item.enabled !== false);
+    const value = Number(rule?.ruleValue);
+    return Number.isFinite(value) && value > 0 ? value : fallback;
+  };
+
+  const assignmentFootprint = (assignment: LoadingAssignment) => {
+    const length = Number(assignment.lengthCm ?? assignment.usedLengthCm ?? 0);
+    const width = Number(assignment.widthCm ?? 0);
+    if (!assignment.allowRotate || !length || !width) {
+      return { length, width };
+    }
+    const longSide = Math.max(length, width);
+    const shortSide = Math.min(length, width);
+    const rotatedWidthLimit = loadingRuleNumber('rotatedLoadMaxWidthMm', 3500);
+    return longSide <= rotatedWidthLimit ? { length: shortSide, width: longSide } : { length, width };
+  };
+
+  const loadingVehicleFootprint = (vehicle: LoadingPlan['vehicles'][number]) => {
+    const footprints = vehicle.assignments.map(assignmentFootprint);
+    const estimatedLength = footprints.reduce((sum, item) => sum + item.length, 0);
+    const maxWidth = footprints.reduce((max, item) => Math.max(max, item.width), 0);
+    const sideBySideWidth = [...footprints]
+      .sort((a, b) => b.width - a.width)
+      .slice(0, 2)
+      .reduce((sum, item) => sum + item.width, 0);
+    const estimatedWidth = /并排|收尾|补位|集中|组合/.test(vehicle.loadingMethod) ? Math.max(maxWidth, sideBySideWidth) : maxWidth;
+    return {
+      estimatedLength: Math.round(estimatedLength),
+      estimatedWidth: Math.round(estimatedWidth),
+      maxWidth: Math.round(maxWidth),
+    };
+  };
+
+  const loadingPlanHighlights = (plan?: LoadingPlan | null) => {
+    const notes = plan?.notes?.filter(Boolean) ?? [];
+    if (!notes.length) return null;
+    return (
+      <Card size="small" title="本次配载方案要点" style={{ background: '#f8fbff' }}>
+        <Space direction="vertical" size={8} style={{ width: '100%' }}>
+          {notes.map((item, index) => (
+            <Alert key={`${index}-${item}`} type={index === 0 ? 'info' : 'success'} showIcon message={item} />
+          ))}
+        </Space>
+      </Card>
+    );
   };
 
   const loadingVehicleTitle = (vehicle: LoadingPlan['vehicles'][number]) =>
@@ -971,6 +1482,9 @@ export default function App() {
         const lengthMm = assignment.lengthCm ?? cargo?.lengthCm ?? '';
         const widthMm = assignment.widthCm ?? cargo?.widthCm ?? '';
         const heightMm = assignment.heightCm ?? cargo?.heightCm ?? '';
+        const allowRotate = assignment.allowRotate ?? cargo?.allowRotate;
+        const allowStack = assignment.allowStack ?? cargo?.allowStack;
+        const remark = assignment.remark ?? cargo?.remark ?? '';
         return [
           `车辆${vehicleIndex + 1}`,
           `${vehicle.vehicle.category} / ${vehicle.vehicle.name}`,
@@ -980,11 +1494,14 @@ export default function App() {
           widthMm,
           heightMm,
           assignment.weightKg,
+          allowRotate === false ? '否' : '是',
+          allowStack ? '是' : '否',
+          remark,
         ];
       }),
     );
     const sheet = XLSX.utils.aoa_to_sheet([
-      ['车辆', '当前车型名称', '货物序号', '货物名称', '长', '宽', '高', '重量'],
+      ['车辆', '当前车型名称', '货物序号', '货物名称', '长', '宽', '高', '重量', '允许旋转', '允许堆叠', '备注'],
       ...rows,
     ]);
     const merges: XLSX.Range[] = [];
@@ -1009,8 +1526,11 @@ export default function App() {
       { wch: 12 },
       { wch: 12 },
       { wch: 14 },
+      { wch: 12 },
+      { wch: 12 },
+      { wch: 28 },
     ];
-    const range = XLSX.utils.decode_range(sheet['!ref'] ?? 'A1:H1');
+    const range = XLSX.utils.decode_range(sheet['!ref'] ?? 'A1:K1');
     for (let row = range.s.r; row <= range.e.r; row += 1) {
       for (let col = range.s.c; col <= range.e.c; col += 1) {
         const address = XLSX.utils.encode_cell({ r: row, c: col });
@@ -1077,7 +1597,7 @@ export default function App() {
       await loadData();
       setLoadingPlanUploadFiles([]);
       setLoadingPlanSaved(true);
-      setActiveLoadingStep('saved');
+      setCurrentLoadingStep('saved');
     } catch (error) {
       message.error((error as Error).message);
     } finally {
@@ -1178,37 +1698,107 @@ export default function App() {
   };
 
   const openVehicleTypeModal = (record?: VehicleType) => {
-    setEditingVehicleType(record ?? null);
+    const normalizedRecord = record ? { ...record, photoFiles: normalizeCargoFiles(record.photoFiles) } : null;
+    setEditingVehicleType(normalizedRecord);
     vehicleTypeForm.resetFields();
     vehicleTypeForm.setFieldsValue(
-      record
-        ? { ...record, priceWeight: record.priceWeight ?? record.priceSort }
+      normalizedRecord
+        ? {
+            ...normalizedRecord,
+            priceWeight: normalizedRecord.priceWeight ?? normalizedRecord.priceSort,
+            isClosed: normalizedRecord.isClosed === true || normalizedRecord.isClosed === 1 ? 1 : 0,
+            vehiclePhotoUploadFiles: [],
+          }
         : {
-        sequenceNo: vehicleTypes.length + 1,
-        category: '篷布车',
+            sequenceNo: vehicleTypes.length + 1,
+            category: '篷布车',
+            isClosed: 0,
+            vehiclePhotoUploadFiles: [],
           },
     );
     setVehicleTypeModalOpen(true);
   };
 
-  const saveVehicleType = async (values: Partial<VehicleType>) => {
+  const saveVehicleType = async (values: Partial<VehicleType> & { vehiclePhotoUploadFiles?: UploadFile[] }) => {
     try {
+      const uploadedPhotos = await uploadCargoFiles(values.vehiclePhotoUploadFiles, 'vehicle-types');
+      const payload = {
+        ...values,
+        vehiclePhotoUploadFiles: undefined,
+        photoFiles: [...normalizeCargoFiles(editingVehicleType?.photoFiles), ...uploadedPhotos],
+      };
       if (editingVehicleType) {
         await apiRequest(`/api/vehicle-types/${editingVehicleType.id}`, {
           method: 'PUT',
-          body: JSON.stringify(values),
+          body: JSON.stringify(payload),
         });
         message.success('车型已更新');
       } else {
         await apiRequest('/api/vehicle-types', {
           method: 'POST',
-          body: JSON.stringify(values),
+          body: JSON.stringify(payload),
         });
         message.success('车型已创建');
       }
       setVehicleTypeModalOpen(false);
       setEditingVehicleType(null);
       vehicleTypeForm.resetFields();
+      await loadData();
+    } catch (error) {
+      message.error((error as Error).message);
+    }
+  };
+
+  const openVehicleQuoteModal = (record?: VehicleTypeQuote) => {
+    setEditingVehicleQuote(record ?? null);
+    vehicleQuoteForm.resetFields();
+    vehicleQuoteForm.setFieldsValue(
+      record ?? {
+        quoteBatch: new Date().toISOString().slice(0, 10),
+        quoteDate: new Date().toISOString().slice(0, 10),
+        originCountry: '中国',
+        originCity: '霍尔果斯',
+        currency: 'USD',
+      },
+    );
+    setVehicleQuoteModalOpen(true);
+  };
+
+  const saveVehicleQuote = async (values: Partial<VehicleTypeQuote>) => {
+    try {
+      const selectedVehicle = vehicleTypes.find((item) => item.id === values.vehicleTypeId);
+      const payload = {
+        ...values,
+        vehicleTypeName:
+          values.vehicleTypeName ||
+          (selectedVehicle ? `${selectedVehicle.category} / ${selectedVehicle.name}` : undefined),
+      };
+      if (editingVehicleQuote) {
+        await apiRequest(`/api/vehicle-type-quotes/${editingVehicleQuote.id}`, {
+          method: 'PUT',
+          body: JSON.stringify(payload),
+        });
+        message.success('车型报价已更新');
+      } else {
+        await apiRequest('/api/vehicle-type-quotes', {
+          method: 'POST',
+          body: JSON.stringify(payload),
+        });
+        message.success('车型报价已创建');
+      }
+      setVehicleQuoteModalOpen(false);
+      setEditingVehicleQuote(null);
+      vehicleQuoteForm.resetFields();
+      await loadData();
+    } catch (error) {
+      message.error((error as Error).message);
+    }
+  };
+
+  const deleteVehicleQuote = async (record: VehicleTypeQuote) => {
+    try {
+      await apiRequest(`/api/vehicle-type-quotes/${record.id}`, { method: 'DELETE' });
+      message.success('车型报价已删除');
       await loadData();
     } catch (error) {
       message.error((error as Error).message);
@@ -1265,6 +1855,140 @@ export default function App() {
     }
   };
 
+  const weekdayOptions = [
+    { value: 1, label: '周一' },
+    { value: 2, label: '周二' },
+    { value: 3, label: '周三' },
+    { value: 4, label: '周四' },
+    { value: 5, label: '周五' },
+    { value: 6, label: '周六' },
+    { value: 7, label: '周日' },
+  ];
+  const weekdayLabelMap = Object.fromEntries(weekdayOptions.map((item) => [item.value, item.label])) as Record<number, string>;
+  const dayTypeOptions = ['节假日', '调休日', '临时休息', '特殊工作日'].map((value) => ({ value, label: value }));
+
+  const parsePeriodsText = (text?: string) =>
+    String(text ?? '')
+      .split(/\n|；|;/)
+      .map((item) => item.trim())
+      .filter(Boolean)
+      .map((item) => {
+        const match = item.match(/^(\d{1,2}:\d{2})\s*[-~至]\s*(\d{1,2}:\d{2})$/);
+        if (!match) throw new Error(`工作时段格式不正确：${item}`);
+        return { startTime: match[1], endTime: match[2] };
+      });
+
+  const formatPeriodsText = (periods?: Array<{ startTime: string; endTime: string }>) =>
+    (periods ?? []).map((period) => `${period.startTime}-${period.endTime}`).join('\n');
+
+  const openWorkingTimeRuleModal = (record?: WorkingTimeRule) => {
+    setEditingWorkingTimeRule(record ?? null);
+    workingTimeRuleForm.resetFields();
+    const periods = record?.periods ?? [];
+    workingTimeRuleForm.setFieldsValue(
+      record
+        ? {
+            ...record,
+            weekdays: Array.from(new Set(periods.map((period) => period.weekday))),
+            periodsText: formatPeriodsText(periods.filter((period) => period.weekday === periods[0]?.weekday)),
+          }
+        : {
+            timezone: 'Asia/Shanghai',
+            enabled: true,
+            weekdays: [1, 2, 3, 4, 5],
+            periodsText: '10:00-14:00\n16:00-20:00',
+          },
+    );
+    setWorkingTimeRuleModalOpen(true);
+  };
+
+  const saveWorkingTimeRule = async () => {
+    try {
+      const values = await workingTimeRuleForm.validateFields();
+      const weekdays = (values.weekdays ?? []) as number[];
+      const basePeriods = parsePeriodsText(values.periodsText);
+      const periods = weekdays.flatMap((weekday) => basePeriods.map((period) => ({ weekday, ...period })));
+      const payload = { ...values, periods, periodsText: undefined, weekdays: undefined };
+      if (editingWorkingTimeRule) {
+        await apiRequest(`/api/working-time-rules/${editingWorkingTimeRule.id}`, {
+          method: 'PUT',
+          body: JSON.stringify(payload),
+        });
+        message.success('节点工作时间已更新');
+      } else {
+        await apiRequest('/api/working-time-rules', {
+          method: 'POST',
+          body: JSON.stringify(payload),
+        });
+        message.success('节点工作时间已创建');
+      }
+      setWorkingTimeRuleModalOpen(false);
+      setEditingWorkingTimeRule(null);
+      workingTimeRuleForm.resetFields();
+      await loadData();
+    } catch (error) {
+      message.error((error as Error).message);
+    }
+  };
+
+  const deleteWorkingTimeRule = async (record: WorkingTimeRule) => {
+    try {
+      await apiRequest(`/api/working-time-rules/${record.id}`, { method: 'DELETE' });
+      message.success('节点工作时间已删除');
+      await loadData();
+    } catch (error) {
+      message.error((error as Error).message);
+    }
+  };
+
+  const openWorkingCalendarModal = (record?: WorkingCalendarDay) => {
+    setEditingWorkingCalendarDay(record ?? null);
+    workingCalendarForm.resetFields();
+    workingCalendarForm.setFieldsValue(
+      record
+        ? { ...record, periodsText: formatPeriodsText(record.periods) }
+        : { dayType: '节假日', allDay: true, enabled: true },
+    );
+    setWorkingCalendarModalOpen(true);
+  };
+
+  const saveWorkingCalendarDay = async () => {
+    try {
+      const values = await workingCalendarForm.validateFields();
+      const periods = values.allDay ? [] : parsePeriodsText(values.periodsText);
+      const payload = { ...values, periods, periodsText: undefined };
+      if (editingWorkingCalendarDay) {
+        await apiRequest(`/api/working-calendar-days/${editingWorkingCalendarDay.id}`, {
+          method: 'PUT',
+          body: JSON.stringify(payload),
+        });
+        message.success('节假日/特殊日已更新');
+      } else {
+        await apiRequest('/api/working-calendar-days', {
+          method: 'POST',
+          body: JSON.stringify(payload),
+        });
+        message.success('节假日/特殊日已创建');
+      }
+      setWorkingCalendarModalOpen(false);
+      setEditingWorkingCalendarDay(null);
+      workingCalendarForm.resetFields();
+      await loadData();
+    } catch (error) {
+      message.error((error as Error).message);
+    }
+  };
+
+  const deleteWorkingCalendarDay = async (record: WorkingCalendarDay) => {
+    try {
+      await apiRequest(`/api/working-calendar-days/${record.id}`, { method: 'DELETE' });
+      message.success('节假日/特殊日已删除');
+      await loadData();
+    } catch (error) {
+      message.error((error as Error).message);
+    }
+  };
+
   const openLoadingAiConfigModal = () => {
     loadingAiConfigForm.resetFields();
     loadingAiConfigForm.setFieldsValue({
@@ -1300,6 +2024,158 @@ export default function App() {
     }
   };
 
+  const openExchangeRateModal = (record?: ExchangeRate) => {
+    setEditingExchangeRate(record ?? null);
+    exchangeRateForm.resetFields();
+    exchangeRateForm.setFieldsValue(
+      record ?? {
+        currencyCode: 'USD',
+        currencyName: 'USD',
+        rateToCny: 1,
+        source: 'manual',
+        enabled: true,
+      },
+    );
+    setExchangeRateModalOpen(true);
+  };
+
+  const saveExchangeRate = async (values: Partial<ExchangeRate>) => {
+    try {
+      const payload = {
+        ...values,
+        currencyCode: values.currencyCode?.toUpperCase(),
+      };
+      if (editingExchangeRate) {
+        await apiRequest(`/api/exchange-rates/${editingExchangeRate.id}`, {
+          method: 'PUT',
+          body: JSON.stringify(payload),
+        });
+        message.success('汇率已更新');
+      } else {
+        await apiRequest('/api/exchange-rates', {
+          method: 'POST',
+          body: JSON.stringify(payload),
+        });
+        message.success('汇率已创建');
+      }
+      setExchangeRateModalOpen(false);
+      setEditingExchangeRate(null);
+      exchangeRateForm.resetFields();
+      await loadData();
+    } catch (error) {
+      message.error((error as Error).message);
+    }
+  };
+
+  const deleteExchangeRate = async (record: ExchangeRate) => {
+    try {
+      await apiRequest(`/api/exchange-rates/${record.id}`, { method: 'DELETE' });
+      message.success('汇率已停用');
+      await loadData();
+    } catch (error) {
+      message.error((error as Error).message);
+    }
+  };
+
+  const syncExchangeRates = async () => {
+    try {
+      setSyncingExchangeRates(true);
+      const result = await apiRequest<{ items: ExchangeRate[] }>('/api/exchange-rates/sync', { method: 'POST' });
+      setExchangeRates(result.items ?? []);
+      message.success('汇率已同步');
+    } catch (error) {
+      message.error((error as Error).message);
+    } finally {
+      setSyncingExchangeRates(false);
+    }
+  };
+
+  const openGpsProviderModal = (record?: GpsProvider) => {
+    setEditingGpsProvider(record ?? null);
+    gpsProviderForm.resetFields();
+    gpsProviderForm.setFieldsValue(
+      record ?? {
+        shortName: '星河途安',
+        name: '星河途安',
+        enabled: true,
+      },
+    );
+    setGpsProviderModalOpen(true);
+  };
+
+  const saveGpsProvider = async (values: Partial<GpsProvider>) => {
+    try {
+      const payload = { ...values };
+      if (editingGpsProvider) {
+        await apiRequest(`/api/gps-providers/${editingGpsProvider.id}`, {
+          method: 'PUT',
+          body: JSON.stringify(payload),
+        });
+        message.success('GPS服务商已更新');
+      } else {
+        await apiRequest('/api/gps-providers', {
+          method: 'POST',
+          body: JSON.stringify(payload),
+        });
+        message.success('GPS服务商已创建');
+      }
+      setGpsProviderModalOpen(false);
+      setEditingGpsProvider(null);
+      gpsProviderForm.resetFields();
+      await loadData();
+    } catch (error) {
+      message.error((error as Error).message);
+    }
+  };
+
+  const testGpsProvider = async () => {
+    try {
+      const values = await gpsProviderForm.validateFields(['apiUrl', 'username', 'passwordMd5']);
+      setTestingGpsProvider(true);
+      const result = await apiRequest<{ ok?: boolean; message?: string; serverId?: string }>('/api/gps-providers/test', {
+        method: 'POST',
+        body: JSON.stringify(values),
+      });
+      message.success(result.message || `GPS登录测试成功${result.serverId ? `，Server ID：${result.serverId}` : ''}`);
+    } catch (error) {
+      message.error((error as Error).message);
+    } finally {
+      setTestingGpsProvider(false);
+    }
+  };
+
+  const deleteGpsProvider = async (record: GpsProvider) => {
+    try {
+      await apiRequest(`/api/gps-providers/${record.id}`, { method: 'DELETE' });
+      message.success('GPS服务商已删除');
+      await loadData();
+    } catch (error) {
+      message.error((error as Error).message);
+    }
+  };
+
+  const saveMapConfig = async () => {
+    try {
+      const values = await mapConfigForm.validateFields();
+      const result = await apiRequest<MapConfig>('/api/map-config', {
+        method: 'PUT',
+        body: JSON.stringify(values),
+      });
+      setMapConfig(result);
+      mapConfigForm.setFieldsValue({
+        provider: result.provider || 'amap',
+        amapWebKey: result.amapWebKey || '',
+        amapRestKey: result.amapRestKey || '',
+        amapSecurityJsCode: result.amapSecurityJsCode || '',
+        enabled: result.enabled,
+        remark: result.remark || '',
+      });
+      message.success('地图配置已保存');
+    } catch (error) {
+      message.error((error as Error).message);
+    }
+  };
+
   const invalidateMarketInfo = async (record: MarketInfo) => {
     try {
       await apiRequest(`/api/market-info/${record.id}`, { method: 'DELETE' });
@@ -1307,6 +2183,22 @@ export default function App() {
       setMarketInfos((items) => items.filter((item) => item.id !== record.id));
     } catch (error) {
       message.error((error as Error).message);
+    }
+  };
+
+  const refreshDriverCheckpointAddresses = async () => {
+    setRefreshingDriverAddresses(true);
+    try {
+      const result = await apiRequest<{ updated: number; scanned: number }>('/api/driver/checkpoints/refresh-addresses', {
+        method: 'POST',
+      });
+      const checkpointRes = await apiRequest<{ items: DriverCheckpoint[] }>('/api/driver/checkpoints');
+      setDriverCheckpoints(checkpointRes.items ?? []);
+      message.success(`已刷新 ${result.updated} 条位置${result.scanned ? `，扫描 ${result.scanned} 条` : ''}`);
+    } catch (error) {
+      message.error((error as Error).message);
+    } finally {
+      setRefreshingDriverAddresses(false);
     }
   };
 
@@ -1362,7 +2254,17 @@ export default function App() {
     {
       title: '经纬度',
       width: 190,
-      render: (_, row) => nowrapText(`${Number(row.latitude).toFixed(6)}, ${Number(row.longitude).toFixed(6)}`),
+      render: (_, row) => {
+        const latitude = Number(row.latitude);
+        const longitude = Number(row.longitude);
+        if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return nowrapText('-');
+        const text = `${latitude.toFixed(6)}, ${longitude.toFixed(6)}`;
+        return (
+          <Button type="link" size="small" style={{ padding: 0 }} onClick={() => window.open(`https://www.google.com/maps?q=${latitude},${longitude}`, '_blank')}>
+            {text}
+          </Button>
+        );
+      },
     },
     { title: '车牌', dataIndex: 'plateNo', width: 120, render: (value) => nowrapText(value || '-') },
     {
@@ -1544,6 +2446,30 @@ export default function App() {
     { title: '有效高度', dataIndex: 'effectiveHeight', width: 120, render: (value) => value ?? '-' },
     { title: '有效方数', dataIndex: 'effectiveVolume', width: 120, render: (value) => value ?? '-' },
     { title: '载重', dataIndex: 'payloadWeight', width: 120, render: (value) => value ?? '-' },
+    { title: '车皮重量', dataIndex: 'tareWeight', width: 120, render: (value) => value ?? '-' },
+    {
+      title: '是否封闭',
+      dataIndex: 'isClosed',
+      width: 110,
+      render: (value) => (value === true || value === 1 ? <Tag color="purple">是</Tag> : '否'),
+    },
+    {
+      title: '车辆照片',
+      dataIndex: 'photoFiles',
+      width: 120,
+      render: (files: VehicleType['photoFiles'], row) =>
+        normalizeCargoFiles(files).length ? (
+          <Button
+            type="link"
+            icon={<EyeOutlined />}
+            onClick={() => setVehiclePhotoPreview({ title: `${row.category} / ${row.name}`, files: normalizeCargoFiles(files) })}
+          >
+            查看
+          </Button>
+        ) : (
+          '-'
+        ),
+    },
     { title: '适用场景', dataIndex: 'scenario', width: 260, render: nowrapText },
     {
       title: '操作',
@@ -1553,6 +2479,108 @@ export default function App() {
         <Button type="link" icon={<EditOutlined />} onClick={() => openVehicleTypeModal(row)}>
           编辑
         </Button>
+      ),
+    },
+  ];
+
+  const filteredVehicleTypes = vehicleTypes.filter((item) => {
+    const name = vehicleTypeFilters.name.trim();
+    return !name || item.name.includes(name) || `${item.category} / ${item.name}`.includes(name);
+  });
+
+  const quoteDestinationCityMap: Record<string, string[]> = {
+    哈萨克斯坦: ['阿拉木图', '阿斯塔纳', '卡拉干达', '奇姆肯特', '库斯塔奈', '阿克托别', '阿克套', '阿特劳', '塔拉兹'],
+    乌兹别克斯坦: ['塔什干', '努库斯', '撒马尔罕', '布哈拉', '纳沃伊', '卡尔西', '费尔干纳', '浩罕', '纳曼干', '阿尔马雷克'],
+    俄罗斯: ['莫斯科', '明斯克', '圣彼得堡', '叶卡捷琳堡'],
+    塔吉克斯坦: ['苦盏', '杜尚别'],
+  };
+
+  const quoteCountryOptions = Object.keys(quoteDestinationCityMap).map((value) => ({ value, label: value }));
+  const quoteCityOptions = (country?: string) =>
+    (country && quoteDestinationCityMap[country] ? quoteDestinationCityMap[country] : Object.values(quoteDestinationCityMap).flat()).map(
+      (value) => ({ value, label: value }),
+    );
+
+  const filteredVehicleTypeQuotes = vehicleTypeQuotes.filter((item) => {
+    const quoteBatch = vehicleQuoteFilters.quoteBatch.trim();
+    const vehicleTypeName = vehicleQuoteFilters.vehicleTypeName.trim();
+    return (
+      (!quoteBatch || item.quoteBatch.includes(quoteBatch) || item.quoteDate.includes(quoteBatch)) &&
+      (!vehicleQuoteFilters.destinationCountry || item.destinationCountry === vehicleQuoteFilters.destinationCountry) &&
+      (!vehicleQuoteFilters.destinationCity || item.destinationCity === vehicleQuoteFilters.destinationCity) &&
+      (!vehicleTypeName || item.vehicleTypeName.includes(vehicleTypeName))
+    );
+  });
+
+  const routeText = (row: Pick<VehicleTypeQuote, 'originCountry' | 'originCity' | 'destinationCountry' | 'destinationCity'>) =>
+    `${row.originCountry || '中国'} ${row.originCity || '霍尔果斯'} → ${row.destinationCountry} ${row.destinationCity}`;
+
+  const vehicleTypeLabel = (quote: VehicleTypeQuote) => {
+    const vehicleType = vehicleTypes.find((item) => item.id === quote.vehicleTypeId);
+    return vehicleType ? `序号${vehicleType.sequenceNo} ${quote.vehicleTypeName}` : quote.vehicleTypeName;
+  };
+
+  const quoteTrendQuotes = quoteTrendRoute
+    ? vehicleTypeQuotes
+        .filter(
+          (item) =>
+            (item.originCountry || '中国') === (quoteTrendRoute.originCountry || '中国') &&
+            (item.originCity || '霍尔果斯') === (quoteTrendRoute.originCity || '霍尔果斯') &&
+            item.destinationCountry === quoteTrendRoute.destinationCountry &&
+            item.destinationCity === quoteTrendRoute.destinationCity &&
+            (quoteTrendRoute.vehicleTypeId
+              ? item.vehicleTypeId === quoteTrendRoute.vehicleTypeId
+              : item.vehicleTypeName === quoteTrendRoute.vehicleTypeName),
+        )
+        .sort((a, b) => a.quoteDate.localeCompare(b.quoteDate))
+    : [];
+
+  const quoteTrendData = quoteTrendQuotes.map((item) => ({
+    quoteDate: item.quoteDate,
+    price: Number(item.price),
+    quoteBatch: item.quoteBatch,
+    currency: item.currency || 'USD',
+  }));
+
+  const vehicleTypeQuoteColumns: ColumnsType<VehicleTypeQuote> = [
+    { title: '报价批次', dataIndex: 'quoteBatch', width: 140, render: nowrapText },
+    { title: '报价日期', dataIndex: 'quoteDate', width: 120, render: nowrapText },
+    {
+      title: '路线',
+      width: 260,
+      render: (_, row) => (
+        <Button type="link" style={{ padding: 0 }} onClick={() => setQuoteTrendRoute(row)}>
+          {routeText(row)}
+        </Button>
+      ),
+    },
+    { title: '车型', dataIndex: 'vehicleTypeName', width: 220, render: nowrapText },
+    {
+      title: '价格',
+      width: 130,
+      render: (_, row) => (
+        <Text strong>
+          {Number(row.price).toLocaleString()} {row.currency || 'USD'}
+        </Text>
+      ),
+    },
+    { title: '备注', dataIndex: 'remark', width: 260, render: nowrapText },
+    { title: '更新时间', dataIndex: 'updatedAt', width: 170, render: (value) => formatBeijingTime(value, true) },
+    {
+      title: '操作',
+      width: 150,
+      fixed: 'right',
+      render: (_, row) => (
+        <Space size={4}>
+          <Button type="link" icon={<EditOutlined />} onClick={() => openVehicleQuoteModal(row)}>
+            编辑
+          </Button>
+          <Popconfirm title="确认删除这条车型报价？" onConfirm={() => void deleteVehicleQuote(row)}>
+            <Button type="link" danger icon={<DeleteOutlined />}>
+              删除
+            </Button>
+          </Popconfirm>
+        </Space>
       ),
     },
   ];
@@ -1602,6 +2630,158 @@ export default function App() {
             编辑
           </Button>
           <Popconfirm title="确认删除这条配载规则？" onConfirm={() => void deleteLoadingRule(row)}>
+            <Button type="link" danger icon={<DeleteOutlined />}>
+              删除
+            </Button>
+          </Popconfirm>
+        </Space>
+      ),
+    },
+  ];
+
+  const workingTimeRuleColumns: ColumnsType<WorkingTimeRule> = [
+    { title: '规则名称', dataIndex: 'name', width: 180, render: nowrapText },
+    { title: '国家', dataIndex: 'country', width: 120, render: (value) => value || <Tag>通用</Tag> },
+    { title: '地点/口岸', dataIndex: 'location', width: 140, render: nowrapText },
+    { title: '节点名称', dataIndex: 'nodeName', width: 140, render: nowrapText },
+    { title: '时区', dataIndex: 'timezone', width: 140 },
+    {
+      title: '工作时段',
+      width: 360,
+      render: (_, row) => (
+        <Space size={[4, 4]} wrap>
+          {(row.periods ?? []).map((period, index) => (
+            <Tag key={`${period.weekday}-${period.startTime}-${index}`}>
+              {weekdayLabelMap[period.weekday] ?? `周${period.weekday}`} {period.startTime}-{period.endTime}
+            </Tag>
+          ))}
+        </Space>
+      ),
+    },
+    {
+      title: '状态',
+      dataIndex: 'enabled',
+      width: 90,
+      render: (value) => <Tag color={value ? 'green' : 'default'}>{value ? '启用' : '停用'}</Tag>,
+    },
+    { title: '备注', dataIndex: 'remark', width: 220, render: nowrapText },
+    {
+      title: '操作',
+      width: 150,
+      fixed: 'right',
+      render: (_, row) => (
+        <Space size={4}>
+          <Button type="link" icon={<EditOutlined />} onClick={() => openWorkingTimeRuleModal(row)}>
+            编辑
+          </Button>
+          <Popconfirm title="确认删除这条工作时间规则？" onConfirm={() => void deleteWorkingTimeRule(row)}>
+            <Button type="link" danger icon={<DeleteOutlined />}>
+              删除
+            </Button>
+          </Popconfirm>
+        </Space>
+      ),
+    },
+  ];
+
+  const workingCalendarColumns: ColumnsType<WorkingCalendarDay> = [
+    { title: '日期', dataIndex: 'date', width: 120 },
+    { title: '类型', dataIndex: 'dayType', width: 120, render: (value) => <Tag>{value}</Tag> },
+    { title: '名称', dataIndex: 'name', width: 160, render: nowrapText },
+    { title: '国家', dataIndex: 'country', width: 120, render: (value) => value || <Tag>通用</Tag> },
+    { title: '地点/口岸', dataIndex: 'location', width: 140, render: nowrapText },
+    { title: '全天', dataIndex: 'allDay', width: 80, render: (value) => (value ? '是' : '否') },
+    { title: '特殊时段', width: 180, render: (_, row) => formatPeriodsText(row.periods) || '-' },
+    {
+      title: '状态',
+      dataIndex: 'enabled',
+      width: 90,
+      render: (value) => <Tag color={value ? 'green' : 'default'}>{value ? '启用' : '停用'}</Tag>,
+    },
+    { title: '备注', dataIndex: 'remark', width: 220, render: nowrapText },
+    {
+      title: '操作',
+      width: 150,
+      fixed: 'right',
+      render: (_, row) => (
+        <Space size={4}>
+          <Button type="link" icon={<EditOutlined />} onClick={() => openWorkingCalendarModal(row)}>
+            编辑
+          </Button>
+          <Popconfirm title="确认删除这条节假日/特殊日？" onConfirm={() => void deleteWorkingCalendarDay(row)}>
+            <Button type="link" danger icon={<DeleteOutlined />}>
+              删除
+            </Button>
+          </Popconfirm>
+        </Space>
+      ),
+    },
+  ];
+
+  const exchangeRateColumns: ColumnsType<ExchangeRate> = [
+    { title: '币种', dataIndex: 'currencyCode', width: 100, render: nowrapText },
+    { title: '名称', dataIndex: 'currencyName', width: 140, render: nowrapText },
+    { title: '兑CNY汇率', dataIndex: 'rateToCny', width: 140, render: (value) => Number(value ?? 0).toFixed(6) },
+    { title: '来源', dataIndex: 'source', width: 150, render: nowrapText },
+    { title: '同步时间', dataIndex: 'syncedAt', width: 170, render: (value) => formatBeijingTime(value, true) },
+    {
+      title: '状态',
+      dataIndex: 'enabled',
+      width: 90,
+      render: (value) => <Tag color={value ? 'green' : 'default'}>{value ? '启用' : '停用'}</Tag>,
+    },
+    { title: '备注', dataIndex: 'remark', width: 220, render: nowrapText },
+    {
+      title: '操作',
+      width: 150,
+      fixed: 'right',
+      render: (_, row) => (
+        <Space size={4}>
+          <Button type="link" icon={<EditOutlined />} onClick={() => openExchangeRateModal(row)}>
+            编辑
+          </Button>
+          <Popconfirm title="确认停用这个币种汇率？" onConfirm={() => void deleteExchangeRate(row)}>
+            <Button type="link" danger icon={<DeleteOutlined />}>
+              停用
+            </Button>
+          </Popconfirm>
+        </Space>
+      ),
+    },
+  ];
+
+  const gpsProviderColumns: ColumnsType<GpsProvider> = [
+    { title: '服务商简称', dataIndex: 'shortName', width: 140, render: nowrapText },
+    { title: '服务商名称', dataIndex: 'name', width: 180, render: nowrapText },
+    { title: '网站', dataIndex: 'website', width: 220, render: nowrapText },
+    { title: '联系电话', dataIndex: 'phone', width: 130, render: nowrapText },
+    { title: '对接API地址', dataIndex: 'apiUrl', width: 260, render: nowrapText },
+    { title: '登录账号', dataIndex: 'username', width: 140, render: nowrapText },
+    {
+      title: '密码MD5',
+      dataIndex: 'hasPasswordMd5',
+      width: 110,
+      render: (value) => (value ? <Tag color="blue">已配置</Tag> : <Tag color="red">未配置</Tag>),
+    },
+    { title: 'Token缓存', dataIndex: 'loginToken', width: 110, render: (value) => (value ? <Tag color="green">已缓存</Tag> : '-') },
+    { title: 'Token过期', dataIndex: 'tokenExpiresAt', width: 170, render: (value) => formatBeijingTime(value) },
+    {
+      title: '启用',
+      dataIndex: 'enabled',
+      width: 90,
+      render: (value) => <Tag color={value ? 'green' : 'default'}>{value ? '启用' : '停用'}</Tag>,
+    },
+    { title: '备注', dataIndex: 'remark', width: 260, render: nowrapText },
+    {
+      title: '操作',
+      width: 150,
+      fixed: 'right',
+      render: (_, row) => (
+        <Space size={4}>
+          <Button type="link" icon={<EditOutlined />} onClick={() => openGpsProviderModal(row)}>
+            编辑
+          </Button>
+          <Popconfirm title="确认删除这个GPS服务商？" onConfirm={() => void deleteGpsProvider(row)}>
             <Button type="link" danger icon={<DeleteOutlined />}>
               删除
             </Button>
@@ -1692,20 +2872,98 @@ export default function App() {
     },
   ];
 
+  const smartLoadingCandidateColumns: ColumnsType<SmartLoadingCandidate> = [
+    {
+      title: '方案',
+      dataIndex: 'name',
+      width: 180,
+      render: (_, row) => (
+        <Button
+          type="link"
+          onClick={() => setSmartLoadingPreview(row)}
+        >
+          {row.name}
+        </Button>
+      ),
+    },
+    {
+      title: '已配/总件数',
+      width: 120,
+      render: (_, row) => `${row.plan.summary.assignedQuantity}/${row.plan.summary.totalCargoQuantity}`,
+    },
+    { title: '车辆数', width: 90, render: (_, row) => row.plan.summary.vehicleCount },
+    { title: '已配重量 kg', width: 130, render: (_, row) => row.plan.summary.assignedWeightKg.toFixed(2) },
+    { title: '已配方数 m3', width: 130, render: (_, row) => row.plan.summary.assignedVolumeCbm.toFixed(3) },
+    { title: '总价格权重', width: 120, render: (_, row) => loadingPlanPriceWeightTotal(row.plan) },
+    {
+      title: '风险提示数量',
+      width: 120,
+      render: (_, row) => <Tag color={row.riskCount ? 'orange' : 'green'}>{row.riskCount}</Tag>,
+    },
+    {
+      title: '车型车辆数',
+      width: 420,
+      render: (_, row) => (
+        <Space size={[4, 4]} wrap>
+          {loadingPlanVehicleTypeSummary(row.plan).map((item) => (
+            <Tag key={item.name} color="blue">
+              {item.name} × {item.count}（权重 {item.weight}）
+            </Tag>
+          ))}
+        </Space>
+      ),
+    },
+    { title: '策略说明', dataIndex: 'description', width: 260, render: nowrapText },
+    {
+      title: '操作',
+      width: 180,
+      fixed: 'right',
+      render: (_, row) => (
+        <Space>
+          <Button size="small" onClick={() => setSmartLoadingPreview(row)}>
+            查看详情
+          </Button>
+          <Button
+            size="small"
+            type={row.key === selectedSmartLoadingKey ? 'primary' : 'default'}
+            onClick={() => {
+              setSelectedSmartLoadingKey(row.key);
+              setLoadingPlan(row.plan);
+              message.success(`已选择${row.name}`);
+            }}
+          >
+            选择
+          </Button>
+        </Space>
+      ),
+    },
+  ];
+
   const sectionTitle: Record<SectionKey, string> = {
     plans: '报价管理',
     home: '首页',
+    executiveDashboard: '经营大盘',
     finance: '财务管理',
+    financeReceivables: '应收费用',
+    financePayables: '应付费用',
+    financeBills: '客户账单',
+    financePayments: '付款申请',
     customers: '客户管理',
     suppliers: '供应商管理',
+    supplierDrivers: '司机列表',
     inquiries: '询单管理',
     loading: '配货配载',
+    smartLoading: '智能配载',
     marketInfo: '市场信息',
+    vehicleQuotes: '车型报价',
     oversizeProjects: '项目管理',
     oversizeTasks: '运输任务',
+    taskDashboard: '任务大屏',
+    taskMap: '地图大屏',
     tracking: '轨迹跟踪',
     driverCheckpoints: '司机打卡',
     workflowTemplates: '流程模板',
+    stateMachine: '状态机',
     workflowTodos: '我的待办',
     baseInfo: '基础信息',
     permissions: '权限管理',
@@ -1713,45 +2971,124 @@ export default function App() {
 
   const menuPermission: Partial<Record<SectionKey, string>> = {
     home: 'home.view',
+    executiveDashboard: 'home.view',
     workflowTodos: 'todo.view',
     tracking: 'tracking.view',
     driverCheckpoints: 'home.view',
     marketInfo: 'market.view',
+    vehicleQuotes: 'base.view',
     inquiries: 'inquiry.view',
     loading: 'loading.view',
+    smartLoading: 'loading.view',
     oversizeProjects: 'project.view',
     oversizeTasks: 'task.view',
+    taskDashboard: 'task.view',
+    taskMap: 'task.view',
     finance: 'finance.view',
+    financeReceivables: 'finance.view',
+    financePayables: 'finance.view',
+    financeBills: 'finance.view',
+    financePayments: 'finance.view',
     suppliers: 'supplier.view',
+    supplierDrivers: 'supplier.view',
     customers: 'customer.view',
     baseInfo: 'base.view',
     workflowTemplates: 'workflow.view',
+    stateMachine: 'stateMachine.view',
     permissions: 'rbac.view',
   };
 
-  const sidebarItems = [
+  const rawSidebarItems: SidebarItem[] = [
     { key: 'home', icon: <FundOutlined />, label: '首页' },
+    { key: 'executiveDashboard', icon: <FundOutlined />, label: '经营大盘' },
     { key: 'workflowTodos', icon: <FileTextOutlined />, label: '我的待办' },
     { key: 'tracking', icon: <PaperClipOutlined />, label: '轨迹跟踪' },
-    { key: 'driverCheckpoints', icon: <CarOutlined />, label: '司机打卡' },
-    { key: 'marketInfo', icon: <FundOutlined />, label: '市场信息' },
-    { key: 'inquiries', icon: <FileTextOutlined />, label: '询单管理' },
-    { key: 'loading', icon: <CarOutlined />, label: '配货配载' },
-    { key: 'oversizeProjects', icon: <RocketOutlined />, label: '项目管理' },
-    { key: 'oversizeTasks', icon: <CheckCircleOutlined />, label: '运输任务' },
-    { key: 'finance', icon: <DollarCircleOutlined />, label: '财务管理' },
-    { key: 'suppliers', icon: <CarOutlined />, label: '供应商管理' },
-    { key: 'customers', icon: <TeamOutlined />, label: '客户管理' },
-    { key: 'baseInfo', icon: <SettingOutlined />, label: '基础信息' },
-    { key: 'workflowTemplates', icon: <SettingOutlined />, label: '流程模板' },
-    { key: 'permissions', icon: <SettingOutlined />, label: '权限管理' },
-  ].filter((item) => can(menuPermission[item.key as SectionKey] ?? 'home.view'));
+    {
+      key: 'preSale',
+      icon: <FundOutlined />,
+      label: '售前服务',
+      children: [
+        { key: 'marketInfo', icon: <FundOutlined />, label: '市场信息' },
+        { key: 'loading', icon: <CarOutlined />, label: '配货配载' },
+        { key: 'smartLoading', icon: <RocketOutlined />, label: '智能配载' },
+        { key: 'inquiries', icon: <FileTextOutlined />, label: '询单管理' },
+        { key: 'vehicleQuotes', icon: <DollarCircleOutlined />, label: '车型报价' },
+      ],
+    },
+    {
+      key: 'inSale',
+      icon: <RocketOutlined />,
+      label: '售中服务',
+      children: [
+        { key: 'oversizeProjects', icon: <RocketOutlined />, label: '项目管理' },
+        { key: 'oversizeTasks', icon: <CheckCircleOutlined />, label: '运输任务' },
+        { key: 'taskDashboard', icon: <FundOutlined />, label: '任务大屏' },
+        { key: 'taskMap', icon: <EnvironmentOutlined />, label: '地图大屏' },
+        { key: 'driverCheckpoints', icon: <CarOutlined />, label: '司机打卡' },
+      ],
+    },
+    {
+      key: 'financeGroup',
+      icon: <DollarCircleOutlined />,
+      label: '财务管理',
+      children: [
+        { key: 'financeReceivables', icon: <DollarCircleOutlined />, label: '应收费用' },
+        { key: 'financePayables', icon: <DollarCircleOutlined />, label: '应付费用' },
+        { key: 'financeBills', icon: <FileTextOutlined />, label: '客户账单' },
+        { key: 'financePayments', icon: <CheckCircleOutlined />, label: '付款申请' },
+      ],
+    },
+    {
+      key: 'baseConfig',
+      icon: <SettingOutlined />,
+      label: '基础配置',
+      children: [
+        { key: 'customers', icon: <TeamOutlined />, label: '客户管理' },
+        { key: 'suppliers', icon: <CarOutlined />, label: '供应商管理' },
+        { key: 'supplierDrivers', icon: <TeamOutlined />, label: '司机列表' },
+        { key: 'baseInfo', icon: <SettingOutlined />, label: '基础信息' },
+        { key: 'workflowTemplates', icon: <SettingOutlined />, label: '流程模板' },
+        { key: 'stateMachine', icon: <SettingOutlined />, label: '状态机' },
+        { key: 'permissions', icon: <SettingOutlined />, label: '权限管理' },
+      ],
+    },
+  ];
+
+  const sidebarItems = rawSidebarItems
+    .map((item) => {
+      if ('children' in item) {
+        const children = item.children.filter((child) => can(menuPermission[child.key] ?? 'home.view'));
+        return children.length ? { ...item, children } : null;
+      }
+      return can(menuPermission[item.key] ?? 'home.view') ? item : null;
+    })
+    .filter(Boolean) as SidebarItem[];
+
+  const availableSectionKeys = sidebarItems.flatMap((item) => ('children' in item ? item.children.map((child) => child.key) : [item.key]));
+  const financeTabBySection: Partial<Record<SectionKey, 'receivable' | 'payable' | 'bills' | 'payments'>> = {
+    financeReceivables: 'receivable',
+    financePayables: 'payable',
+    financeBills: 'bills',
+    financePayments: 'payments',
+  };
+  const isFinanceSection = activeSection === 'finance' || Boolean(financeTabBySection[activeSection]);
 
   useEffect(() => {
-    if (sessionUser && sidebarItems.length && !sidebarItems.some((item) => item.key === activeSection)) {
-      setActiveSection(sidebarItems[0].key as SectionKey);
+    if (sessionUser && availableSectionKeys.length && !availableSectionKeys.includes(activeSection)) {
+      setActiveSection(availableSectionKeys[0]);
     }
-  }, [sessionUser?.permissions?.join(','), activeSection]);
+  }, [sessionUser?.permissions?.join(','), activeSection, availableSectionKeys.join(',')]);
+
+  const isSmartLoadingSection = activeSection === 'smartLoading';
+  const isLoadingSection = activeSection === 'loading' || isSmartLoadingSection;
+  const currentLoadingStep = isSmartLoadingSection ? activeSmartLoadingStep : activeLoadingStep;
+  const setCurrentLoadingStep = (step: string) => {
+    if (isSmartLoadingSection) {
+      setActiveSmartLoadingStep(step);
+    } else {
+      setActiveLoadingStep(step);
+    }
+  };
 
   if (!sessionUser) {
     return (
@@ -1772,7 +3109,7 @@ export default function App() {
             <Form
               form={loginForm}
               layout="vertical"
-              initialValues={{ email: '38128151@qq.com', password: 'Admin123!' }}
+                initialValues={{ email: 'admin@obiecrm.com', password: 'ost987456' }}
               onFinish={(values) => void login(values)}
             >
               <Form.Item name="email" label="邮箱" rules={[{ required: true, message: '请输入邮箱' }]}>
@@ -1826,7 +3163,9 @@ export default function App() {
         <Menu
           mode="inline"
           selectedKeys={[activeSection]}
+          openKeys={openSidebarKeys}
           inlineCollapsed={siderCollapsed}
+          onOpenChange={(keys) => setOpenSidebarKeys(keys as string[])}
           onClick={(event) => setActiveSection(event.key as SectionKey)}
           items={sidebarItems}
         />
@@ -1857,16 +3196,18 @@ export default function App() {
             </Title>
           </div>
           <Space>
-            <Button icon={<ReloadOutlined />} onClick={() => void loadData()} loading={loading}>
-              刷新
-            </Button>
+            {activeSection !== 'taskMap' ? (
+              <Button icon={<ReloadOutlined />} onClick={() => void loadData()} loading={loading}>
+                刷新
+              </Button>
+            ) : null}
             {activeSection === 'baseInfo' && can('base.manage') ? (
               <Button type="primary" icon={<PlusOutlined />} onClick={() => openVehicleTypeModal()}>
                 新增车型
               </Button>
-            ) : activeSection === 'loading' ? (
+            ) : isLoadingSection ? (
               <>
-                <Button icon={<FileTextOutlined />} onClick={() => setActiveLoadingStep('saved')}>
+                <Button icon={<FileTextOutlined />} onClick={() => setCurrentLoadingStep('saved')}>
                   查看配载方案
                 </Button>
                 {can('loading.manage') ? (
@@ -1883,15 +3224,19 @@ export default function App() {
                 style={{
                   display:
                     activeSection === 'home' ||
+                    activeSection === 'executiveDashboard' ||
                     activeSection === 'customers' ||
-                    activeSection === 'finance' ||
+                    isFinanceSection ||
                     activeSection === 'suppliers' ||
                     activeSection === 'marketInfo' ||
+                    activeSection === 'vehicleQuotes' ||
                     activeSection === 'driverCheckpoints' ||
                     activeSection === 'oversizeProjects' ||
                     activeSection === 'oversizeTasks' ||
                     activeSection === 'tracking' ||
                     activeSection === 'workflowTemplates' ||
+                    activeSection === 'stateMachine' ||
+                    activeSection === 'taskMap' ||
                     activeSection === 'workflowTodos' ||
                     activeSection === 'permissions' ||
                     !can('inquiry.create')
@@ -1907,17 +3252,22 @@ export default function App() {
 
         <Content className="crm-content">
           <Space direction="vertical" size={18} style={{ width: '100%' }}>
-            {activeSection !== 'loading' &&
+            {!isLoadingSection &&
             activeSection !== 'home' &&
+            activeSection !== 'executiveDashboard' &&
             activeSection !== 'oversizeProjects' &&
             activeSection !== 'oversizeTasks' &&
             activeSection !== 'tracking' &&
             activeSection !== 'marketInfo' &&
             activeSection !== 'driverCheckpoints' &&
+            activeSection !== 'taskDashboard' &&
             activeSection !== 'workflowTemplates' &&
+            activeSection !== 'stateMachine' &&
+            activeSection !== 'taskMap' &&
             activeSection !== 'workflowTodos' &&
             activeSection !== 'permissions' &&
-            activeSection !== 'finance' ? (
+            activeSection !== 'vehicleQuotes' &&
+            !isFinanceSection ? (
               <Row gutter={[16, 16]}>
                 <Col xs={24} sm={12} xl={6}>
                   <Card className="metric-card">
@@ -1944,6 +3294,8 @@ export default function App() {
 
             {activeSection === 'home' ? (
               <DashboardPage />
+            ) : activeSection === 'executiveDashboard' ? (
+              <ExecutiveDashboardPage />
             ) : activeSection === 'inquiries' ? (
               <Card className="glass-card" title="询单列表" bordered={false}>
                 <Table
@@ -1966,32 +3318,32 @@ export default function App() {
                   pagination={{ pageSize: 8 }}
                 />
               </Card>
-            ) : activeSection === 'loading' ? (
+            ) : isLoadingSection ? (
               <Space direction="vertical" size={16} style={{ width: '100%' }}>
                 <Card className="glass-card" bordered={false}>
                   <Steps
                     type="navigation"
                     size="small"
-                    current={activeLoadingStep === 'cargo' ? 0 : activeLoadingStep === 'result' ? 1 : 2}
+                    current={currentLoadingStep === 'cargo' ? 0 : currentLoadingStep === 'result' ? 1 : 2}
                     items={[
                       { title: '第一步：录入货物数据' },
-                      { title: '第二步：配载结果调整' },
+                      { title: isSmartLoadingSection ? '第二步：选择候选方案' : '第二步：配载结果调整' },
                       { title: '第三步：保存与导出方案' },
                     ]}
                     onChange={(index) => {
                       if (index === 1 && !loadingPlan) {
-                        message.warning('请先完成自动配载');
+                        message.warning(isSmartLoadingSection ? '请先生成智能候选方案' : '请先完成自动配载');
                         return;
                       }
                       if (index === 2 && !loadingPlanSaved) {
                         message.warning('请先在第二步保存方案');
                         return;
                       }
-                      setActiveLoadingStep(index === 0 ? 'cargo' : index === 1 ? 'result' : 'saved');
+                      setCurrentLoadingStep(index === 0 ? 'cargo' : index === 1 ? 'result' : 'saved');
                     }}
                   />
                 </Card>
-                {activeLoadingStep === 'cargo' ? (
+                {currentLoadingStep === 'cargo' ? (
                 <Card
                   className="glass-card"
                   title="第一步：货物信息"
@@ -2008,8 +3360,8 @@ export default function App() {
                       >
                         <Button icon={<FileExcelOutlined />}>批量导入</Button>
                       </Upload>
-                      <Button icon={<CarOutlined />} onClick={runLoadingPlan}>
-                        自动配载
+                      <Button icon={<CarOutlined />} onClick={isSmartLoadingSection ? runSmartLoadingPlans : runLoadingPlan}>
+                        {isSmartLoadingSection ? '生成智能方案' : '自动配载'}
                       </Button>
                       <Button type="primary" icon={<PlusOutlined />} onClick={() => openCargoModal()}>
                         新增货物
@@ -2027,12 +3379,42 @@ export default function App() {
                           setLoadingDestinationCountries(value);
                           setLoadingPlan(null);
                           setLoadingPlanSaved(false);
+                          setSmartLoadingCandidates([]);
+                          setSelectedSmartLoadingKey(null);
+                          setSmartLoadingPreview(null);
                         }}
                         placeholder="请选择途经或目的国家"
                         style={{ width: '100%', marginTop: 6 }}
                         options={countryOptions}
                       />
                     </Col>
+                    {!isSmartLoadingSection ? (
+                    <Col xs={24} md={8}>
+                      <Text type="secondary">配载策略</Text>
+                      <Select
+                        value={loadingStrategy}
+                        onChange={(value) => {
+                          setLoadingStrategy(value);
+                          setLoadingPlan(null);
+                          setLoadingPlanSaved(false);
+                          setSmartLoadingCandidates([]);
+                          setSelectedSmartLoadingKey(null);
+                          setSmartLoadingPreview(null);
+                        }}
+                        style={{ width: '100%', marginTop: 6 }}
+                        options={[
+                          {
+                            value: 'quoteSafe',
+                            label: '报价稳妥：不压极限，接近红线优先拆车',
+                          },
+                          {
+                            value: 'executionOptimized',
+                            label: '执行优化：现场复核后压缩车数',
+                          },
+                        ]}
+                      />
+                    </Col>
+                    ) : null}
                   </Row>
                   <Table
                     rowKey="id"
@@ -2045,13 +3427,14 @@ export default function App() {
                 </Card>
                 ) : null}
 
-                {activeLoadingStep === 'result' ? (
+                {currentLoadingStep === 'result' ? (
                 <Card
                   className="glass-card"
-                  title="第二步：配载结果调整"
+                  title={isSmartLoadingSection ? '第二步：智能候选方案' : '第二步：配载结果调整'}
                   bordered={false}
                   extra={
                     <Space>
+                      {!isSmartLoadingSection ? (
                       <Button
                         disabled={!loadingPlan}
                         icon={<RocketOutlined />}
@@ -2063,6 +3446,7 @@ export default function App() {
                       >
                         AI优化
                       </Button>
+                      ) : null}
                       <Button disabled={!loadingPlan} icon={<DownloadOutlined />} onClick={() => loadingPlan && downloadLoadingPlanFile(loadingPlan)}>
                         下载
                       </Button>
@@ -2084,6 +3468,29 @@ export default function App() {
                 >
                   {loadingPlan ? (
                     <Space direction="vertical" size={16} style={{ width: '100%' }}>
+                      {isSmartLoadingSection ? (
+                        <Table
+                          rowKey="key"
+                          size="small"
+                          dataSource={smartLoadingCandidates}
+                          columns={smartLoadingCandidateColumns}
+                          pagination={false}
+                          scroll={{ x: 1500 }}
+                          rowClassName={(row) => (row.key === selectedSmartLoadingKey ? 'selected-row' : '')}
+                        />
+                      ) : null}
+                      {isSmartLoadingSection ? (
+                        <Alert
+                          type={loadingPlan ? 'success' : 'info'}
+                          showIcon
+                          message={
+                            loadingPlan
+                              ? `当前已选择：${smartLoadingCandidates.find((item) => item.key === selectedSmartLoadingKey)?.name ?? '候选方案'}`
+                              : '请先选择一个候选方案'
+                          }
+                          description={loadingPlan ? '点击候选方案名称或“查看详情”可在弹窗中查看车辆明细；确认后可保存当前选择的方案。' : '候选列表用于横向对比，详情会在弹窗中展示。'}
+                        />
+                      ) : null}
                       <Row gutter={[12, 12]}>
                         <Col xs={24} md={5}>
                           <Statistic title="已配/总件数" value={`${loadingPlan.summary.assignedQuantity}/${loadingPlan.summary.totalCargoQuantity}`} />
@@ -2109,7 +3516,10 @@ export default function App() {
                           </Tag>
                         ))}
                       </Space>
-                      {loadingPlan.vehicles.map((vehicle, vehicleIndex) => (
+                      {loadingPlanHighlights(loadingPlan)}
+                      {!isSmartLoadingSection ? loadingPlan.vehicles.map((vehicle, vehicleIndex) => {
+                        const footprint = loadingVehicleFootprint(vehicle);
+                        return (
                         <Card
                           key={`${vehicle.vehicle.id}-${vehicleIndex}`}
                           size="small"
@@ -2130,17 +3540,25 @@ export default function App() {
                           }
                         >
                           <Row gutter={[12, 12]} style={{ marginBottom: 12 }}>
-                            <Col xs={24} md={8}>
+                            <Col xs={24} md={6}>
                               <Text type="secondary">重量利用率</Text>
                               <Progress percent={Math.min(vehicle.weightUtilization, 100)} status={vehicle.weightUtilization > 100 ? 'exception' : 'normal'} />
                             </Col>
-                            <Col xs={24} md={8}>
+                            <Col xs={24} md={6}>
                               <Text type="secondary">方数利用率</Text>
                               <Progress percent={Math.min(vehicle.volumeUtilization, 100)} status={vehicle.volumeUtilization > 100 ? 'exception' : 'normal'} />
                             </Col>
-                            <Col xs={24} md={8}>
-                              <Text type="secondary">最长货物</Text>
-                              <div>{vehicle.maxLengthCm} mm</div>
+                            <Col xs={12} md={4}>
+                              <Text type="secondary">装载估算总长</Text>
+                              <div>{footprint.estimatedLength} mm</div>
+                            </Col>
+                            <Col xs={12} md={4}>
+                              <Text type="secondary">装载估算总宽</Text>
+                              <div>{footprint.estimatedWidth} mm</div>
+                            </Col>
+                            <Col xs={12} md={4}>
+                              <Text type="secondary">单件最大宽</Text>
+                              <div>{footprint.maxWidth} mm</div>
                             </Col>
                           </Row>
                           <Table
@@ -2151,6 +3569,16 @@ export default function App() {
                             columns={[
                               { title: '箱子序号', dataIndex: 'boxNo' },
                               { title: '货物', dataIndex: 'cargoName' },
+                              {
+                                title: '尺寸(mm)',
+                                width: 180,
+                                render: (_, assignment) => {
+                                  const length = assignment.lengthCm ?? 0;
+                                  const width = assignment.widthCm ?? 0;
+                                  const height = assignment.heightCm ?? 0;
+                                  return length && width && height ? `${length} × ${width} × ${height}` : '-';
+                                },
+                              },
                               {
                                 title: '移动车次',
                                 width: 220,
@@ -2178,10 +3606,11 @@ export default function App() {
                               { title: '提醒', render: (_, assignment) => assignment.notes.length ? assignment.notes.map((item) => <Tag key={item}>{item}</Tag>) : '-' },
                             ]}
                           />
-                          {vehicle.warnings.length ? <Alert type="warning" showIcon style={{ marginTop: 12 }} message={vehicle.warnings.join('?')} /> : null}
+                          {vehicle.warnings.length ? <Alert type="warning" showIcon style={{ marginTop: 12 }} message={vehicle.warnings.join('；')} /> : null}
                         </Card>
-                      ))}
-                      {loadingPlan.unassigned.length ? (
+                        );
+                      }) : null}
+                      {!isSmartLoadingSection && loadingPlan.unassigned.length ? (
                         <Alert
                           type="error"
                           showIcon
@@ -2196,7 +3625,7 @@ export default function App() {
                 </Card>
                 ) : null}
 
-                {activeLoadingStep === 'saved' ? (
+                {currentLoadingStep === 'saved' ? (
                 <Card className="glass-card" title="第三步：已保存配载方案" bordered={false}>
                   <Table
                     rowKey="id"
@@ -2213,6 +3642,10 @@ export default function App() {
               <OversizeProjectManagementPage customers={customers} />
             ) : activeSection === 'oversizeTasks' ? (
               <OversizeTaskManagementPage openRequest={taskOpenRequest} />
+            ) : activeSection === 'taskDashboard' ? (
+              <TaskDashboardPage />
+            ) : activeSection === 'taskMap' ? (
+              <TaskMapPage />
             ) : activeSection === 'tracking' ? (
               <TrackingPage />
             ) : activeSection === 'driverCheckpoints' ? (
@@ -2220,7 +3653,14 @@ export default function App() {
                 className="glass-card"
                 title="司机打卡照片"
                 bordered={false}
-                extra={<Text type="secondary">Telegram Mini App 上传的定位防伪照片</Text>}
+                extra={
+                  <Space>
+                    <Text type="secondary">Telegram Mini App 上传的定位防伪照片</Text>
+                    <Button icon={<ReloadOutlined />} loading={refreshingDriverAddresses} onClick={() => void refreshDriverCheckpointAddresses()}>
+                      刷新位置
+                    </Button>
+                  </Space>
+                }
               >
                 <Table
                   rowKey="id"
@@ -2251,6 +3691,8 @@ export default function App() {
               </Card>
             ) : activeSection === 'workflowTemplates' ? (
               <WorkflowTemplatePage />
+            ) : activeSection === 'stateMachine' ? (
+              <StateMachinePage />
             ) : activeSection === 'workflowTodos' ? (
               <WorkflowTodoPage
                 onOpenTask={(todo) => {
@@ -2261,12 +3703,84 @@ export default function App() {
               />
             ) : activeSection === 'permissions' ? (
               <PermissionManagementPage />
-            ) : activeSection === 'finance' ? (
-              <FinancePage />
+            ) : isFinanceSection ? (
+              <FinancePage activeTab={financeTabBySection[activeSection]} />
             ) : activeSection === 'customers' ? (
               <CustomerManagementPage customers={customers as ManagedCustomer[]} loading={loading} onReload={loadData} />
             ) : activeSection === 'suppliers' ? (
               <SupplierManagementPage />
+            ) : activeSection === 'supplierDrivers' ? (
+              <SupplierDriverListPage />
+            ) : activeSection === 'vehicleQuotes' ? (
+              <Space direction="vertical" size={16} style={{ width: '100%' }}>
+                <Card className="glass-card" bordered={false}>
+                  <Row gutter={[12, 12]}>
+                    <Col xs={24} md={6}>
+                      <Input
+                        allowClear
+                        placeholder="报价批次 / 日期"
+                        value={vehicleQuoteFilters.quoteBatch}
+                        onChange={(event) => setVehicleQuoteFilters((current) => ({ ...current, quoteBatch: event.target.value }))}
+                      />
+                    </Col>
+                    <Col xs={24} md={6}>
+                      <Select
+                        allowClear
+                        placeholder="终点国家"
+                        style={{ width: '100%' }}
+                        value={vehicleQuoteFilters.destinationCountry || undefined}
+                        options={quoteCountryOptions}
+                        onChange={(value) =>
+                          setVehicleQuoteFilters((current) => ({
+                            ...current,
+                            destinationCountry: value ?? '',
+                            destinationCity: '',
+                          }))
+                        }
+                      />
+                    </Col>
+                    <Col xs={24} md={6}>
+                      <Select
+                        allowClear
+                        showSearch
+                        optionFilterProp="label"
+                        placeholder="终点城市"
+                        style={{ width: '100%' }}
+                        value={vehicleQuoteFilters.destinationCity || undefined}
+                        options={quoteCityOptions(vehicleQuoteFilters.destinationCountry)}
+                        onChange={(value) => setVehicleQuoteFilters((current) => ({ ...current, destinationCity: value ?? '' }))}
+                      />
+                    </Col>
+                    <Col xs={24} md={6}>
+                      <Input
+                        allowClear
+                        placeholder="车型"
+                        value={vehicleQuoteFilters.vehicleTypeName}
+                        onChange={(event) => setVehicleQuoteFilters((current) => ({ ...current, vehicleTypeName: event.target.value }))}
+                      />
+                    </Col>
+                  </Row>
+                </Card>
+                <Card
+                  className="glass-card"
+                  title="车型报价历史"
+                  bordered={false}
+                  extra={
+                    <Space>
+                      <Tag color="blue">共 {filteredVehicleTypeQuotes.length} 条</Tag>
+                    </Space>
+                  }
+                >
+                  <Table
+                    rowKey="id"
+                    loading={loading}
+                    dataSource={filteredVehicleTypeQuotes}
+                    columns={vehicleTypeQuoteColumns}
+                    scroll={{ x: 1320 }}
+                    pagination={{ pageSize: 12 }}
+                  />
+                </Card>
+              </Space>
             ) : (
               <Space direction="vertical" size={16} style={{ width: '100%' }}>
                 <Card
@@ -2274,17 +3788,26 @@ export default function App() {
                   title="车型配置"
                   bordered={false}
                   extra={
-                    can('base.manage') ? (
-                      <Button type="primary" icon={<PlusOutlined />} onClick={() => openVehicleTypeModal()}>
-                        新增车型
-                      </Button>
-                    ) : null
+                    <Space wrap>
+                      <Input
+                        allowClear
+                        placeholder="筛选车型名称"
+                        value={vehicleTypeFilters.name}
+                        onChange={(event) => setVehicleTypeFilters({ name: event.target.value })}
+                        style={{ width: 220 }}
+                      />
+                      {can('base.manage') ? (
+                        <Button type="primary" icon={<PlusOutlined />} onClick={() => openVehicleTypeModal()}>
+                          新增车型
+                        </Button>
+                      ) : null}
+                    </Space>
                   }
                 >
                   <Table
                     rowKey="id"
                     loading={loading}
-                    dataSource={vehicleTypes}
+                    dataSource={filteredVehicleTypes}
                     columns={vehicleTypeColumns}
                     scroll={{ x: 1280 }}
                     pagination={{ pageSize: 10 }}
@@ -2308,6 +3831,74 @@ export default function App() {
                     dataSource={loadingRuleConfigs}
                     columns={loadingRuleColumns}
                     scroll={{ x: 1220 }}
+                    pagination={{ pageSize: 10 }}
+                  />
+                </Card>
+                <Card
+                  className="glass-card"
+                  title="节点工作时间"
+                  bordered={false}
+                  extra={
+                    can('base.manage') ? (
+                      <Button type="primary" icon={<PlusOutlined />} onClick={() => openWorkingTimeRuleModal()}>
+                        新增规则
+                      </Button>
+                    ) : null
+                  }
+                >
+                  <Table
+                    rowKey="id"
+                    loading={loading}
+                    dataSource={workingTimeRules}
+                    columns={workingTimeRuleColumns}
+                    scroll={{ x: 1420 }}
+                    pagination={{ pageSize: 10 }}
+                  />
+                </Card>
+                <Card
+                  className="glass-card"
+                  title="节假日/特殊日"
+                  bordered={false}
+                  extra={
+                    can('base.manage') ? (
+                      <Button type="primary" icon={<PlusOutlined />} onClick={() => openWorkingCalendarModal()}>
+                        新增日期
+                      </Button>
+                    ) : null
+                  }
+                >
+                  <Table
+                    rowKey="id"
+                    loading={loading}
+                    dataSource={workingCalendarDays}
+                    columns={workingCalendarColumns}
+                    scroll={{ x: 1280 }}
+                    pagination={{ pageSize: 10 }}
+                  />
+                </Card>
+                <Card
+                  className="glass-card"
+                  title="汇率维护"
+                  bordered={false}
+                  extra={
+                    can('base.manage') ? (
+                      <Space wrap>
+                        <Button icon={<ReloadOutlined />} loading={syncingExchangeRates} onClick={() => void syncExchangeRates()}>
+                          同步最新汇率
+                        </Button>
+                        <Button type="primary" icon={<PlusOutlined />} onClick={() => openExchangeRateModal()}>
+                          新增币种
+                        </Button>
+                      </Space>
+                    ) : null
+                  }
+                >
+                  <Table
+                    rowKey="id"
+                    loading={loading}
+                    dataSource={exchangeRates}
+                    columns={exchangeRateColumns}
+                    scroll={{ x: 1180 }}
                     pagination={{ pageSize: 10 }}
                   />
                 </Card>
@@ -2342,6 +3933,78 @@ export default function App() {
                     <Descriptions.Item label="温度">{loadingAiConfig?.temperature ?? 0.2}</Descriptions.Item>
                     <Descriptions.Item label="备注" span={3}>{loadingAiConfig?.notes || '-'}</Descriptions.Item>
                   </Descriptions>
+                </Card>
+                <Card
+                  className="glass-card"
+                  title="地图KEY配置"
+                  bordered={false}
+                  extra={
+                    can('base.manage') ? (
+                      <Button type="primary" icon={<SaveOutlined />} onClick={() => void saveMapConfig()}>
+                        保存配置
+                      </Button>
+                    ) : null
+                  }
+                >
+                  <Form form={mapConfigForm} layout="vertical" initialValues={{ provider: 'amap', enabled: true }}>
+                    <Row gutter={12}>
+                      <Col xs={24} md={8}>
+                        <Form.Item name="enabled" label="是否启用" valuePropName="checked">
+                          <Switch checkedChildren="启用" unCheckedChildren="停用" />
+                        </Form.Item>
+                      </Col>
+                      <Col xs={24} md={8}>
+                        <Form.Item name="provider" label="地图服务商" rules={[{ required: true, message: '请选择地图服务商' }]}>
+                          <Select options={[{ label: '高德地图', value: 'amap' }]} />
+                        </Form.Item>
+                      </Col>
+                      <Col xs={24} md={8}>
+                        <Form.Item label="当前状态">
+                          {mapConfig?.amapWebKey ? <Tag color="green">已配置 Web Key</Tag> : <Tag color="orange">未配置 Web Key</Tag>}
+                          {mapConfig?.amapRestKey ? <Tag color="green">已配置服务 Key</Tag> : <Tag color="orange">未配置服务 Key</Tag>}
+                        </Form.Item>
+                      </Col>
+                    </Row>
+                    <Row gutter={12}>
+                      <Col xs={24} md={12}>
+                        <Form.Item name="amapWebKey" label="高德 Web JS Key" extra="用于地图大屏加载高德地图 JS API。">
+                          <Input.Password placeholder="请输入高德 Web JS Key" />
+                        </Form.Item>
+                      </Col>
+                      <Col xs={24} md={12}>
+                        <Form.Item name="amapSecurityJsCode" label="高德安全密钥 JS Code" extra="如果高德控制台启用了安全密钥，请填写。">
+                          <Input.Password placeholder="请输入 securityJsCode" />
+                        </Form.Item>
+                      </Col>
+                    </Row>
+                    <Form.Item name="amapRestKey" label="高德 Web 服务 Key" extra="用于后端逆地理编码，把经纬度解析成地址。">
+                      <Input.Password placeholder="请输入高德 Web 服务 Key" />
+                    </Form.Item>
+                    <Form.Item name="remark" label="备注">
+                      <TextArea rows={2} />
+                    </Form.Item>
+                  </Form>
+                </Card>
+                <Card
+                  className="glass-card"
+                  title="GPS服务商管理"
+                  bordered={false}
+                  extra={
+                    can('base.manage') ? (
+                      <Button type="primary" icon={<PlusOutlined />} onClick={() => openGpsProviderModal()}>
+                        新增服务商
+                      </Button>
+                    ) : null
+                  }
+                >
+                  <Table
+                    rowKey="id"
+                    loading={loading}
+                    dataSource={gpsProviders}
+                    columns={gpsProviderColumns}
+                    scroll={{ x: 1680 }}
+                    pagination={{ pageSize: 10 }}
+                  />
                 </Card>
               </Space>
             )}
@@ -2392,7 +4055,10 @@ export default function App() {
                 )}
               </Descriptions.Item>
             </Descriptions>
-            {selectedLoadingPlanRecord.planResult?.vehicles?.map((vehicle, index) => (
+            {loadingPlanHighlights(selectedLoadingPlanRecord.planResult)}
+            {selectedLoadingPlanRecord.planResult?.vehicles?.map((vehicle, index) => {
+              const footprint = loadingVehicleFootprint(vehicle);
+              return (
               <Card
                 key={`${vehicle.vehicle.id}-${index}`}
                 size="small"
@@ -2404,17 +4070,23 @@ export default function App() {
                 }
               >
                 <Row gutter={[12, 12]} style={{ marginBottom: 12 }}>
-                  <Col xs={24} md={6}>
+                  <Col xs={24} md={4}>
                     <Statistic title="装载方式" value={vehicle.loadingMethod || '自动配载'} />
                   </Col>
-                  <Col xs={24} md={6}>
+                  <Col xs={24} md={4}>
                     <Statistic title="重量 kg" value={vehicle.usedWeightKg.toFixed(2)} />
                   </Col>
-                  <Col xs={24} md={6}>
+                  <Col xs={24} md={4}>
                     <Statistic title="方数 m3" value={vehicle.usedVolumeCbm.toFixed(3)} />
                   </Col>
-                  <Col xs={24} md={6}>
-                    <Statistic title="最大长度 mm" value={vehicle.maxLengthCm} />
+                  <Col xs={12} md={4}>
+                    <Statistic title="装载估算总长 mm" value={footprint.estimatedLength} />
+                  </Col>
+                  <Col xs={12} md={4}>
+                    <Statistic title="装载估算总宽 mm" value={footprint.estimatedWidth} />
+                  </Col>
+                  <Col xs={12} md={4}>
+                    <Statistic title="单件最大宽 mm" value={footprint.maxWidth} />
                   </Col>
                 </Row>
                 <Table
@@ -2433,7 +4105,133 @@ export default function App() {
                 />
                 {vehicle.warnings?.length ? <Alert type="warning" showIcon style={{ marginTop: 12 }} message={vehicle.warnings.join('；')} /> : null}
               </Card>
-            ))}
+              );
+            })}
+          </Space>
+        ) : null}
+      </Modal>
+
+      <Modal
+        title={smartLoadingPreview ? `${smartLoadingPreview.name} · 配载详情` : '智能配载方案详情'}
+        open={Boolean(smartLoadingPreview)}
+        onCancel={() => setSmartLoadingPreview(null)}
+        width={1180}
+        destroyOnHidden
+        footer={
+          smartLoadingPreview ? (
+            <Space>
+              <Button onClick={() => setSmartLoadingPreview(null)}>关闭</Button>
+              <Button icon={<DownloadOutlined />} onClick={() => downloadLoadingPlanFile(smartLoadingPreview.plan)}>
+                下载此方案
+              </Button>
+              <Button
+                type="primary"
+                onClick={() => {
+                  setSelectedSmartLoadingKey(smartLoadingPreview.key);
+                  setLoadingPlan(smartLoadingPreview.plan);
+                  setSmartLoadingPreview(null);
+                  message.success(`已选择${smartLoadingPreview.name}`);
+                }}
+              >
+                选择此方案
+              </Button>
+            </Space>
+          ) : null
+        }
+      >
+        {smartLoadingPreview ? (
+          <Space direction="vertical" size={16} style={{ width: '100%' }}>
+            <Descriptions bordered size="small" column={3}>
+              <Descriptions.Item label="方案">{smartLoadingPreview.name}</Descriptions.Item>
+              <Descriptions.Item label="车辆数">{smartLoadingPreview.plan.summary.vehicleCount}</Descriptions.Item>
+              <Descriptions.Item label="风险提示">{smartLoadingPreview.riskCount}</Descriptions.Item>
+              <Descriptions.Item label="已配/总件数">
+                {smartLoadingPreview.plan.summary.assignedQuantity}/{smartLoadingPreview.plan.summary.totalCargoQuantity}
+              </Descriptions.Item>
+              <Descriptions.Item label="已配重量 kg">{smartLoadingPreview.plan.summary.assignedWeightKg.toFixed(2)}</Descriptions.Item>
+              <Descriptions.Item label="已配方数 m3">{smartLoadingPreview.plan.summary.assignedVolumeCbm.toFixed(3)}</Descriptions.Item>
+              <Descriptions.Item label="总价格权重">{loadingPlanPriceWeightTotal(smartLoadingPreview.plan)}</Descriptions.Item>
+              <Descriptions.Item label="策略说明" span={2}>{smartLoadingPreview.description}</Descriptions.Item>
+            </Descriptions>
+            <Space size={[8, 8]} wrap>
+              <Text type="secondary">车型车辆数：</Text>
+              {loadingPlanVehicleTypeSummary(smartLoadingPreview.plan).map((item) => (
+                <Tag key={item.name} color="blue">
+                  {item.name} × {item.count}（权重 {item.weight}）
+                </Tag>
+              ))}
+            </Space>
+            {loadingPlanHighlights(smartLoadingPreview.plan)}
+            {smartLoadingPreview.plan.vehicles.map((vehicle, vehicleIndex) => {
+              const footprint = loadingVehicleFootprint(vehicle);
+              return (
+                <Card
+                  key={`${vehicle.vehicle.id}-${vehicleIndex}`}
+                  size="small"
+                  title={`第 ${vehicleIndex + 1} 车：${loadingVehicleTitle(vehicle)}`}
+                  extra={
+                    <Button icon={<EyeOutlined />} onClick={() => setPreviewLoadingVehicle({ vehicle, index: vehicleIndex })}>
+                      3D预览
+                    </Button>
+                  }
+                >
+                  <Row gutter={[12, 12]} style={{ marginBottom: 12 }}>
+                    <Col xs={24} md={4}>
+                      <Statistic title="装载方式" value={vehicle.loadingMethod || '自动配载'} />
+                    </Col>
+                    <Col xs={24} md={4}>
+                      <Statistic title="重量 kg" value={vehicle.usedWeightKg.toFixed(2)} />
+                    </Col>
+                    <Col xs={24} md={4}>
+                      <Statistic title="方数 m3" value={vehicle.usedVolumeCbm.toFixed(3)} />
+                    </Col>
+                    <Col xs={12} md={4}>
+                      <Statistic title="装载估算总长 mm" value={footprint.estimatedLength} />
+                    </Col>
+                    <Col xs={12} md={4}>
+                      <Statistic title="装载估算总宽 mm" value={footprint.estimatedWidth} />
+                    </Col>
+                    <Col xs={12} md={4}>
+                      <Statistic title="单件最大宽 mm" value={footprint.maxWidth} />
+                    </Col>
+                  </Row>
+                  <Table
+                    rowKey="id"
+                    size="small"
+                    pagination={false}
+                    dataSource={vehicle.assignments}
+                    columns={[
+                      { title: '箱子序号', dataIndex: 'boxNo', width: 120 },
+                      { title: '货物', dataIndex: 'cargoName', width: 180 },
+                      {
+                        title: '尺寸(mm)',
+                        width: 180,
+                        render: (_, assignment) => {
+                          const length = assignment.lengthCm ?? 0;
+                          const width = assignment.widthCm ?? 0;
+                          const height = assignment.heightCm ?? 0;
+                          return length && width && height ? `${length} × ${width} × ${height}` : '-';
+                        },
+                      },
+                      { title: '数量', dataIndex: 'quantity', width: 90 },
+                      { title: '重量 kg', dataIndex: 'weightKg', width: 120, render: (value) => Number(value).toFixed(2) },
+                      { title: '方数 m3', dataIndex: 'volumeCbm', width: 120, render: (value) => Number(value).toFixed(3) },
+                      { title: '提醒', render: (_, assignment) => (assignment.notes?.length ? assignment.notes.map((item) => <Tag key={item}>{item}</Tag>) : '-') },
+                    ]}
+                    scroll={{ x: 900 }}
+                  />
+                  {vehicle.warnings?.length ? <Alert type="warning" showIcon style={{ marginTop: 12 }} message={vehicle.warnings.join('；')} /> : null}
+                </Card>
+              );
+            })}
+            {smartLoadingPreview.plan.unassigned.length ? (
+              <Alert
+                type="error"
+                showIcon
+                message="存在无法配载货物"
+                description={smartLoadingPreview.plan.unassigned.map((item) => `${item.cargo.boxNo} ${item.cargo.name} x ${item.quantity}：${item.reasons.join('、')}`).join('\n')}
+              />
+            ) : null}
           </Space>
         ) : null}
       </Modal>
@@ -2899,7 +4697,7 @@ export default function App() {
           cargoForm.resetFields();
         }}
         onOk={() => cargoForm.submit()}
-        okText="淇濆瓨"
+        okText="保存"
         width={760}
       >
         <Form
@@ -3063,6 +4861,207 @@ export default function App() {
       </Modal>
 
       <Modal
+        title={editingExchangeRate ? '编辑汇率' : '新增汇率'}
+        open={exchangeRateModalOpen}
+        onCancel={() => {
+          setExchangeRateModalOpen(false);
+          setEditingExchangeRate(null);
+          exchangeRateForm.resetFields();
+        }}
+        onOk={() => exchangeRateForm.submit()}
+        okText="保存"
+        width={760}
+        destroyOnHidden
+      >
+        <Form form={exchangeRateForm} layout="vertical" onFinish={(values) => void saveExchangeRate(values)}>
+          <Row gutter={12}>
+            <Col span={12}>
+              <Form.Item name="currencyCode" label="币种" rules={[{ required: true, message: '请输入币种' }]}>
+                <Input
+                  maxLength={8}
+                  placeholder="例如：USD"
+                  onChange={(event) => exchangeRateForm.setFieldValue('currencyCode', event.target.value.toUpperCase())}
+                />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item name="currencyName" label="币种名称">
+                <Input placeholder="例如：美元" />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Row gutter={12}>
+            <Col span={12}>
+              <Form.Item name="rateToCny" label="兑CNY汇率" rules={[{ required: true, message: '请输入汇率' }]}>
+                <InputNumber min={0.000001} precision={6} style={{ width: '100%' }} />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item name="source" label="来源">
+                <Input placeholder="manual / open.er-api.com" />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Row gutter={12}>
+            <Col span={12}>
+              <Form.Item name="syncedAt" label="同步时间">
+                <Input placeholder="自动同步后写入" />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item name="enabled" label="是否启用" valuePropName="checked">
+                <Switch checkedChildren="启用" unCheckedChildren="停用" />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Form.Item name="remark" label="备注">
+            <TextArea rows={3} />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
+        title={editingVehicleQuote ? '编辑车型报价' : '新增车型报价'}
+        open={vehicleQuoteModalOpen}
+        onCancel={() => {
+          setVehicleQuoteModalOpen(false);
+          setEditingVehicleQuote(null);
+          vehicleQuoteForm.resetFields();
+        }}
+        onOk={() => vehicleQuoteForm.submit()}
+        okText="保存"
+        width={760}
+      >
+        <Form form={vehicleQuoteForm} layout="vertical" onFinish={(values) => void saveVehicleQuote(values)}>
+          <Row gutter={12}>
+            <Col span={12}>
+              <Form.Item name="quoteBatch" label="报价批次" rules={[{ required: true, message: '请输入报价批次' }]}>
+                <Input placeholder="例如：2026-06-第1周" />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item name="quoteDate" label="报价日期" rules={[{ required: true, message: '请输入报价日期' }]}>
+                <Input placeholder="例如：2026-06-08" />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Row gutter={12}>
+            <Col span={12}>
+              <Form.Item name="originCountry" label="起点国家" rules={[{ required: true, message: '请输入起点国家' }]}>
+                <Input />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item name="originCity" label="起点城市" rules={[{ required: true, message: '请输入起点城市' }]}>
+                <Input />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Row gutter={12}>
+            <Col span={12}>
+              <Form.Item name="destinationCountry" label="终点国家" rules={[{ required: true, message: '请选择终点国家' }]}>
+                <Select
+                  options={quoteCountryOptions}
+                  onChange={() => vehicleQuoteForm.setFieldValue('destinationCity', undefined)}
+                />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item name="destinationCity" label="终点城市" rules={[{ required: true, message: '请选择终点城市' }]}>
+                <Select
+                  showSearch
+                  optionFilterProp="label"
+                  options={quoteCityOptions(quoteDestinationCountry)}
+                />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Row gutter={12}>
+            <Col span={12}>
+              <Form.Item name="vehicleTypeId" label="车型">
+                <Select
+                  allowClear
+                  showSearch
+                  optionFilterProp="label"
+                  placeholder="选择系统车型，或在下方手动填写"
+                  options={vehicleTypes.map((item) => ({
+                    value: item.id,
+                    label: `${item.category} / ${item.name}${item.lineCount ? ` · ${item.lineCount}线` : ''}${item.axleCount ? ` ${item.axleCount}轴` : ''}`,
+                  }))}
+                  onChange={(value) => {
+                    const selectedVehicle = vehicleTypes.find((item) => item.id === value);
+                    if (selectedVehicle) {
+                      vehicleQuoteForm.setFieldValue('vehicleTypeName', `${selectedVehicle.category} / ${selectedVehicle.name}`);
+                    }
+                  }}
+                />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item name="vehicleTypeName" label="车型名称" rules={[{ required: true, message: '请输入车型名称' }]}>
+                <Input placeholder="例如：17米5轴平板" />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Row gutter={12}>
+            <Col span={12}>
+              <Form.Item name="price" label="价格" rules={[{ required: true, message: '请输入价格' }]}>
+                <InputNumber min={0} precision={2} style={{ width: '100%' }} />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item name="currency" label="币种" rules={[{ required: true, message: '请选择币种' }]}>
+                <Select
+                  options={['USD', 'CNY', 'KZT', 'RUB'].map((value) => ({ value, label: value }))}
+                />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Form.Item name="remark" label="备注">
+            <TextArea rows={3} placeholder="例如：本周报价、节假日临时涨价、需要确认空车位置等" />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
+        title={quoteTrendRoute ? `${routeText(quoteTrendRoute)} · ${vehicleTypeLabel(quoteTrendRoute)} · 报价走势` : '报价走势'}
+        open={Boolean(quoteTrendRoute)}
+        onCancel={() => setQuoteTrendRoute(null)}
+        footer={null}
+        width={980}
+      >
+        {quoteTrendData.length ? (
+          <Space direction="vertical" size={12} style={{ width: '100%' }}>
+            <Text type="secondary">按报价日期展示当前路线、当前车型的历史价格变化。</Text>
+            <div style={{ width: '100%', height: 420 }}>
+              <ResponsiveContainer>
+                <LineChart data={quoteTrendData} margin={{ top: 16, right: 24, bottom: 8, left: 4 }}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="quoteDate" />
+                  <YAxis />
+                  <Tooltip
+                    formatter={(value) => [`${Number(value).toLocaleString()} ${quoteTrendRoute?.currency || 'USD'}`, '价格']}
+                    labelFormatter={(label) => `报价日期：${label}`}
+                  />
+                  <Legend />
+                  <Line
+                    type="monotone"
+                    dataKey="price"
+                    name={quoteTrendRoute ? vehicleTypeLabel(quoteTrendRoute) : '价格'}
+                    stroke="#1677ff"
+                    strokeWidth={2}
+                    dot={{ r: 4 }}
+                  />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          </Space>
+        ) : (
+          <Empty description="暂无报价历史" />
+        )}
+      </Modal>
+
+      <Modal
         title={editingVehicleType ? '编辑车型' : '新增车型'}
         open={vehicleTypeModalOpen}
         onCancel={() => {
@@ -3117,6 +5116,23 @@ export default function App() {
             </Col>
           </Row>
           <Row gutter={12}>
+            <Col span={12}>
+              <Form.Item name="tareWeight" label="车皮重量">
+                <InputNumber min={0} style={{ width: '100%' }} placeholder="车辆自重" />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item name="isClosed" label="是否封闭">
+                <Select
+                  options={[
+                    { label: '否', value: 0 },
+                    { label: '是', value: 1 },
+                  ]}
+                />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Row gutter={12}>
             <Col span={8}>
               <Form.Item name="effectiveLength" label="有效长度">
                 <InputNumber min={0} style={{ width: '100%' }} />
@@ -3139,11 +5155,65 @@ export default function App() {
                 <InputNumber min={0} style={{ width: '100%' }} />
               </Form.Item>
             </Col>
+            <Col span={12}>
+              <Form.Item
+                name="vehiclePhotoUploadFiles"
+                label="车辆照片"
+                valuePropName="fileList"
+                getValueFromEvent={(event) => event?.fileList ?? []}
+              >
+                <Upload beforeUpload={() => false} multiple accept=".jpg,.jpeg,.png,.webp">
+                  <Button icon={<UploadOutlined />}>上传照片</Button>
+                </Upload>
+              </Form.Item>
+            </Col>
           </Row>
+          {normalizeCargoFiles(editingVehicleType?.photoFiles).length ? (
+            <List
+              size="small"
+              header="已上传照片"
+              dataSource={normalizeCargoFiles(editingVehicleType?.photoFiles)}
+              renderItem={(item) => (
+                <List.Item
+                  actions={[
+                    <Button key="open" type="link" href={fileUrl(item.fileUrl)} target="_blank" rel="noreferrer">
+                      查看
+                    </Button>,
+                  ]}
+                >
+                  <List.Item.Meta avatar={<PaperClipOutlined />} title={item.fileName} description={fileSizeText(item.fileSize)} />
+                </List.Item>
+              )}
+              style={{ marginBottom: 12 }}
+            />
+          ) : null}
           <Form.Item name="scenario" label="适用场景">
             <TextArea rows={4} placeholder="例如：适合普通机械、冷链货物、大件超限运输等" />
           </Form.Item>
         </Form>
+      </Modal>
+
+      <Modal
+        title={vehiclePhotoPreview ? `${vehiclePhotoPreview.title} · 车辆照片` : '车辆照片'}
+        open={Boolean(vehiclePhotoPreview)}
+        onCancel={() => setVehiclePhotoPreview(null)}
+        footer={null}
+        width={820}
+      >
+        <Row gutter={[12, 12]}>
+          {vehiclePhotoPreview?.files.map((file) => (
+            <Col key={file.key ?? file.fileUrl} xs={24} md={12}>
+              <a href={fileUrl(file.fileUrl)} target="_blank" rel="noreferrer">
+                <img
+                  src={fileUrl(file.fileUrl)}
+                  alt={file.fileName}
+                  style={{ width: '100%', maxHeight: 260, objectFit: 'contain', borderRadius: 8, border: '1px solid #e5eaf3' }}
+                />
+                <div style={{ marginTop: 6 }}>{file.fileName}</div>
+              </a>
+            </Col>
+          ))}
+        </Row>
       </Modal>
 
       <Modal
@@ -3226,6 +5296,161 @@ export default function App() {
         </Form>
       </Modal>
 
+      <Drawer
+        title={editingWorkingTimeRule ? '编辑节点工作时间' : '新增节点工作时间'}
+        open={workingTimeRuleModalOpen}
+        onClose={() => {
+          setWorkingTimeRuleModalOpen(false);
+          setEditingWorkingTimeRule(null);
+          workingTimeRuleForm.resetFields();
+        }}
+        width={760}
+        extra={
+          <Space>
+            <Button
+              onClick={() => {
+                setWorkingTimeRuleModalOpen(false);
+                setEditingWorkingTimeRule(null);
+                workingTimeRuleForm.resetFields();
+              }}
+            >
+              取消
+            </Button>
+            <Button type="primary" onClick={() => void saveWorkingTimeRule()}>
+              保存
+            </Button>
+          </Space>
+        }
+      >
+        <Form form={workingTimeRuleForm} layout="vertical">
+          <Row gutter={12}>
+            <Col span={12}>
+              <Form.Item name="name" label="规则名称" rules={[{ required: true, message: '请输入规则名称' }]}>
+                <Input placeholder="例如：出口报关工作时间" />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item name="enabled" label="是否启用" valuePropName="checked">
+                <Switch checkedChildren="启用" unCheckedChildren="停用" />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Row gutter={12}>
+            <Col span={8}>
+              <Form.Item name="country" label="国家">
+                <Select allowClear showSearch options={countryOptions} placeholder="不选表示通用" />
+              </Form.Item>
+            </Col>
+            <Col span={8}>
+              <Form.Item name="location" label="地点/口岸">
+                <Input placeholder="如：霍尔果斯、阿拉山口" />
+              </Form.Item>
+            </Col>
+            <Col span={8}>
+              <Form.Item name="nodeName" label="节点名称">
+                <Input placeholder="如：装车报关、清关" />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Row gutter={12}>
+            <Col span={10}>
+              <Form.Item name="timezone" label="时区" rules={[{ required: true, message: '请输入时区' }]}>
+                <Input placeholder="Asia/Shanghai" />
+              </Form.Item>
+            </Col>
+            <Col span={14}>
+              <Form.Item name="weekdays" label="适用星期" rules={[{ required: true, message: '请选择星期' }]}>
+                <Select mode="multiple" options={weekdayOptions} placeholder="请选择工作日" />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Form.Item
+            name="periodsText"
+            label="工作时段"
+            rules={[{ required: true, message: '请输入工作时段' }]}
+            extra="每行一个时段，例如：10:00-14:00；16:00-20:00。第一版用于计划时间预测和预警，不限制实际操作。"
+          >
+            <TextArea rows={4} />
+          </Form.Item>
+          <Form.Item name="remark" label="备注">
+            <TextArea rows={3} />
+          </Form.Item>
+        </Form>
+      </Drawer>
+
+      <Modal
+        title={editingWorkingCalendarDay ? '编辑节假日/特殊日' : '新增节假日/特殊日'}
+        open={workingCalendarModalOpen}
+        onCancel={() => {
+          setWorkingCalendarModalOpen(false);
+          setEditingWorkingCalendarDay(null);
+          workingCalendarForm.resetFields();
+        }}
+        onOk={() => void saveWorkingCalendarDay()}
+        okText="保存"
+        width={720}
+      >
+        <Form form={workingCalendarForm} layout="vertical">
+          <Row gutter={12}>
+            <Col span={12}>
+              <Form.Item name="date" label="日期" rules={[{ required: true, message: '请输入日期' }]}>
+                <Input type="date" />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item name="dayType" label="类型" rules={[{ required: true, message: '请选择类型' }]}>
+                <Select options={dayTypeOptions} />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Row gutter={12}>
+            <Col span={8}>
+              <Form.Item name="country" label="国家">
+                <Select allowClear showSearch options={countryOptions} placeholder="不选表示通用" />
+              </Form.Item>
+            </Col>
+            <Col span={8}>
+              <Form.Item name="location" label="地点/口岸">
+                <Input placeholder="可为空" />
+              </Form.Item>
+            </Col>
+            <Col span={8}>
+              <Form.Item name="name" label="名称">
+                <Input placeholder="如：新年、临时休息" />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Row gutter={12}>
+            <Col span={12}>
+              <Form.Item name="allDay" label="全天" valuePropName="checked">
+                <Switch checkedChildren="全天" unCheckedChildren="部分时段" />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item name="enabled" label="是否启用" valuePropName="checked">
+                <Switch checkedChildren="启用" unCheckedChildren="停用" />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Form.Item shouldUpdate={(prev, current) => prev.allDay !== current.allDay} noStyle>
+            {({ getFieldValue }) =>
+              getFieldValue('allDay') ? null : (
+                <Form.Item
+                  name="periodsText"
+                  label="特殊工作时段"
+                  extra="非全天时使用，每行一个时段，例如：10:00-14:00。"
+                >
+                  <TextArea rows={3} />
+                </Form.Item>
+              )
+            }
+          </Form.Item>
+          <Form.Item name="remark" label="备注">
+            <TextArea rows={3} />
+          </Form.Item>
+        </Form>
+      </Modal>
+
       <Modal
         title="配载 AI 优化配置"
         open={loadingAiConfigModalOpen}
@@ -3285,6 +5510,103 @@ export default function App() {
           </Form.Item>
         </Form>
       </Modal>
+
+      <Modal
+        title={editingGpsProvider ? '编辑GPS服务商' : '新增GPS服务商'}
+        open={gpsProviderModalOpen}
+        onCancel={() => {
+          setGpsProviderModalOpen(false);
+          setEditingGpsProvider(null);
+          gpsProviderForm.resetFields();
+        }}
+        width={820}
+        footer={[
+          <Button
+            key="cancel"
+            onClick={() => {
+              setGpsProviderModalOpen(false);
+              setEditingGpsProvider(null);
+              gpsProviderForm.resetFields();
+            }}
+          >
+            取消
+          </Button>,
+          <Button key="test" onClick={() => void testGpsProvider()} loading={testingGpsProvider}>
+            测试连接
+          </Button>,
+          <Button key="save" type="primary" onClick={() => gpsProviderForm.submit()}>
+            保存
+          </Button>,
+        ]}
+      >
+        <Form form={gpsProviderForm} layout="vertical" onFinish={(values) => void saveGpsProvider(values)}>
+          <Row gutter={12}>
+            <Col span={8}>
+              <Form.Item name="enabled" label="是否启用" valuePropName="checked">
+                <Switch checkedChildren="启用" unCheckedChildren="停用" />
+              </Form.Item>
+            </Col>
+            <Col span={8}>
+              <Form.Item name="shortName" label="服务商简称" rules={[{ required: true, message: '请输入服务商简称' }]}>
+                <Input placeholder="星河途安" />
+              </Form.Item>
+            </Col>
+            <Col span={8}>
+              <Form.Item name="name" label="服务商名称" rules={[{ required: true, message: '请输入服务商名称' }]}>
+                <Input placeholder="星河途安" />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Row gutter={12}>
+            <Col span={12}>
+              <Form.Item name="website" label="网站">
+                <Input placeholder="https://..." />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item name="phone" label="联系电话">
+                <Input />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Form.Item name="apiUrl" label="对接API地址" extra="例如：https://example.com/webapi，系统会自动拼接 action=login / action=lastposition。">
+            <Input placeholder="https://example.com/webapi" />
+          </Form.Item>
+          <Row gutter={12}>
+            <Col span={12}>
+              <Form.Item name="username" label="登录账号">
+                <Input />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item name="passwordMd5" label="登录密码MD5" extra="必须填写32位小写MD5，不是明文密码。例如 123456 的 MD5 是 e10adc3949ba59abbe56e057f20f883e。">
+                <Input.Password autoComplete="new-password" />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Row gutter={12}>
+            <Col span={12}>
+              <Form.Item name="apiKey" label="API Key">
+                <Input.Password autoComplete="new-password" />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item name="apiToken" label="API Token">
+                <Input.Password autoComplete="new-password" />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Form.Item name="remark" label="备注">
+            <TextArea rows={3} />
+          </Form.Item>
+        </Form>
+      </Modal>
     </Layout>
   );
 }
+
+
+
+
+
+

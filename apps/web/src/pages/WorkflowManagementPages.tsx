@@ -41,7 +41,14 @@ type WorkflowTemplateNode = {
   supplierTypes?: string[];
   requireVehicle: boolean;
   requireDriver: boolean;
+  requireGps: boolean;
+  gpsProviderId?: string | null;
+  gpsProviderShortName?: string | null;
+  gpsProviderName?: string | null;
+  gpsDeviceNo?: string | null;
   timeoutHours?: number | null;
+  workingTimeRuleId?: string | null;
+  workingTimeRuleName?: string | null;
   description?: string | null;
   formFields?: WorkflowFormField[];
   fileRequirements?: WorkflowFileRequirement[];
@@ -93,6 +100,15 @@ type RbacRoleOption = {
   id: string;
   code: string;
   name: string;
+  enabled: boolean;
+};
+
+type WorkingTimeRule = {
+  id: string;
+  name: string;
+  country?: string | null;
+  location?: string | null;
+  nodeName?: string | null;
   enabled: boolean;
 };
 
@@ -149,6 +165,7 @@ export function WorkflowTemplatePage() {
   const [templates, setTemplates] = useState<WorkflowTemplate[]>([]);
   const [employees, setEmployees] = useState<EmployeeOption[]>([]);
   const [roles, setRoles] = useState<RbacRoleOption[]>([]);
+  const [workingTimeRules, setWorkingTimeRules] = useState<WorkingTimeRule[]>([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [templateModal, setTemplateModal] = useState<FormMode<WorkflowTemplate>>({ open: false });
@@ -189,17 +206,30 @@ export function WorkflowTemplatePage() {
     [roles],
   );
 
+  const workingTimeRuleOptions = useMemo(
+    () =>
+      workingTimeRules
+        .filter((item) => item.enabled)
+        .map((item) => ({
+          value: item.id,
+          label: [item.name, item.country, item.location, item.nodeName].filter(Boolean).join(' / '),
+        })),
+    [workingTimeRules],
+  );
+
   const loadTemplates = async () => {
     setLoading(true);
     try {
-      const [result, employeeResult, roleResult] = await Promise.all([
+      const [result, employeeResult, roleResult, workingTimeRuleResult] = await Promise.all([
         apiRequest<{ items: WorkflowTemplate[] }>('/api/workflow/templates'),
         apiRequest<{ items: EmployeeOption[] }>('/api/employees'),
         apiRequest<{ items: RbacRoleOption[] }>('/api/rbac/roles'),
+        apiRequest<{ items: WorkingTimeRule[] }>('/api/working-time-rules'),
       ]);
       setTemplates(result.items ?? []);
       setEmployees(employeeResult.items ?? []);
       setRoles(roleResult.items ?? []);
+      setWorkingTimeRules(workingTimeRuleResult.items ?? []);
     } catch (error) {
       message.error((error as Error).message);
     } finally {
@@ -244,7 +274,13 @@ export function WorkflowTemplatePage() {
     setNodeModal({ open: true, record });
     nodeForm.setFieldsValue(
       record
-        ? { ...record, workflowNodeName: record.nodeName, workflowNodeType: record.nodeType, supplierTypes: stringArrayValue(record.supplierTypes) }
+        ? {
+            ...record,
+            workflowNodeName: record.nodeName,
+            workflowNodeType: record.nodeType,
+            supplierTypes: stringArrayValue(record.supplierTypes),
+            requireGps: Boolean(record.requireGps),
+          }
         : {
             sortOrder: (selectedTemplate?.nodes?.length ?? 0) + 1,
             workflowNodeType: '普通节点',
@@ -257,6 +293,7 @@ export function WorkflowTemplatePage() {
             supplierTypes: [],
             requireVehicle: false,
             requireDriver: false,
+            requireGps: false,
           },
     );
   };
@@ -274,6 +311,8 @@ export function WorkflowTemplatePage() {
           nodeName: values.workflowNodeName,
           nodeType: values.workflowNodeType,
           defaultRoleName: defaultRole?.name ?? '',
+          gpsProviderId: undefined,
+          gpsDeviceNo: '',
           workflowNodeName: undefined,
           workflowNodeType: undefined,
         }),
@@ -408,7 +447,9 @@ export function WorkflowTemplatePage() {
     { title: '需附件', dataIndex: 'requireAttachment', width: 90, render: (value) => (value ? '是' : '否') },
     { title: '需供应商', dataIndex: 'requireSupplier', width: 100, render: (value) => (value ? '是' : '否') },
     { title: '供应商类型', dataIndex: 'supplierTypes', width: 180, render: (value) => stringArrayValue(value).join('、') || '-' },
+    { title: '需GPS', dataIndex: 'requireGps', width: 90, render: (value) => (value ? '是' : '否') },
     { title: '超时小时', dataIndex: 'timeoutHours', width: 100 },
+    { title: '工作时间', dataIndex: 'workingTimeRuleName', width: 180, render: (value) => value || '-' },
     {
       title: '操作',
       width: 140,
@@ -459,7 +500,7 @@ export function WorkflowTemplatePage() {
           </Button>
         }
       >
-        <Table rowKey="id" dataSource={selectedTemplate?.nodes ?? []} columns={nodeColumns} scroll={{ x: 1380 }} pagination={false} />
+        <Table rowKey="id" dataSource={selectedTemplate?.nodes ?? []} columns={nodeColumns} scroll={{ x: 1470 }} pagination={false} />
       </Drawer>
 
       <Drawer
@@ -604,6 +645,17 @@ export function WorkflowTemplatePage() {
                 <InputNumber min={0} precision={0} style={{ width: '100%' }} />
               </Form.Item>
             </Col>
+            <Col span={24}>
+              <Form.Item name="workingTimeRuleId" label="工作时间规则">
+                <Select
+                  allowClear
+                  showSearch
+                  optionFilterProp="label"
+                  options={workingTimeRuleOptions}
+                  placeholder="用于计划时间预测和预警，不限制实际操作"
+                />
+              </Form.Item>
+            </Col>
           </Row>
           <Row gutter={16}>
             <Col span={8}>
@@ -643,6 +695,11 @@ export function WorkflowTemplatePage() {
             </Col>
             <Col span={8}>
               <Form.Item name="requireDriver" label="需要司机" valuePropName="checked">
+                <Switch />
+              </Form.Item>
+            </Col>
+            <Col span={8}>
+              <Form.Item name="requireGps" label="需要GPS" valuePropName="checked">
                 <Switch />
               </Form.Item>
             </Col>

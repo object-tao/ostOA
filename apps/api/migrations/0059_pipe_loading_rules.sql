@@ -1,0 +1,94 @@
+INSERT OR REPLACE INTO loading_rules (
+  id, rule_code, rule_name, category, value_type, rule_value, unit, enabled, description, sort_order, applicable_countries
+) VALUES
+(
+  'lrule-pipeCargoKeywordPattern',
+  'pipeCargoKeywordPattern',
+  '管材识别关键词',
+  '管材规则',
+  'text',
+  '管,pipe,tube,焊管,螺旋管,直缝管,SSAW,ERW',
+  NULL,
+  1,
+  '货物名称、备注或规格中命中这些关键词时，进入管材配载规则。',
+  250,
+  '[]'
+),
+(
+  'lrule-pipeCargoNotAsSolidBox',
+  'pipeCargoNotAsSolidBox',
+  '管材不按普通方箱计算',
+  '管材规则',
+  'text',
+  'true',
+  NULL,
+  1,
+  '管材虽有外接长宽高，但不能按普通实心方箱逐件占满空间计算；允许并排、错位、分层、成捆和小管填空。',
+  251,
+  '[]'
+),
+(
+  'lrule-pipeCargoMissingOdFallback',
+  'pipeCargoMissingOdFallback',
+  '管材无OD时处理口径',
+  '管材规则',
+  'text',
+  'useGivenWidthHeightAsOuterEnvelope',
+  NULL,
+  1,
+  '客户未提供OD外径时，使用客户给出的宽高作为最大外包尺寸参考，但空间利用按管材规则折算，不按普通箱体满占。',
+  252,
+  '[]'
+),
+(
+  'lrule-pipeCargoWeightPerMeterBands',
+  'pipeCargoWeightPerMeterBands',
+  '管材kg/m规格分级',
+  '管材规则',
+  'json',
+  '{"heavyMin":200,"mediumMin":70,"lightMin":30}',
+  'kg/m',
+  1,
+  '无OD或规格不完整时，用单件重量/长度判断管材规格等级：200kg/m以上重型大管，70-200kg/m中型管，30-70kg/m轻型管，30kg/m以下小管。',
+  253,
+  '[]'
+),
+(
+  'lrule-pipeCargoQuoteSafeTruckWeightRangeKg',
+  'pipeCargoQuoteSafeTruckWeightRangeKg',
+  '管材报价稳妥单车重量区间',
+  '管材规则',
+  'json',
+  '{"min":15000,"max":30000}',
+  'kg',
+  1,
+  '报价稳妥模式下，篷布大通道管材单车建议控制在15-30吨区间，现场再复核层数、垫木、防滚、防滑、绑扎和实际车厢尺寸。',
+  254,
+  '[]'
+),
+(
+  'lrule-pipeCargoUzbekMultiCargoLimitKg',
+  'pipeCargoUzbekMultiCargoLimitKg',
+  '管材经过乌兹别克多件合装上限',
+  '管材规则',
+  'number',
+  '44000',
+  'kg',
+  1,
+  '管材经过或到达乌兹别克时，多件合装单车总重仍不得超过44吨。',
+  255,
+  '["乌兹别克","乌兹别克斯坦"]'
+),
+(
+  'lrule-pipeCargoTarpLargeChannelPreferred',
+  'pipeCargoTarpLargeChannelPreferred',
+  '管材优先篷布大通道',
+  '管材规则',
+  'text',
+  'true',
+  NULL,
+  1,
+  '管材必须使用篷布车时，优先使用篷布大通道或6轴大通道；12m管优先同长度合装，6m管可两段长度方向组合。',
+  256,
+  '[]'
+);

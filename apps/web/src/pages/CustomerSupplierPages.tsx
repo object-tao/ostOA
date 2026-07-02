@@ -1,9 +1,11 @@
-import { Button, Card, Col, Descriptions, Divider, Form, Input, InputNumber, List, Modal, Popconfirm, Row, Select, Space, Table, Tag, Upload, message } from 'antd';
+import { Button, Card, Col, Descriptions, Divider, Empty, Form, Input, InputNumber, List, Modal, Popconfirm, Row, Select, Space, Table, Tag, Typography, Upload, message } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import type { UploadFile } from 'antd/es/upload/interface';
-import { DeleteOutlined, EditOutlined, PlusOutlined, UploadOutlined } from '@ant-design/icons';
+import { DeleteOutlined, EditOutlined, PlusOutlined, ReloadOutlined, UploadOutlined } from '@ant-design/icons';
 import { useEffect, useState } from 'react';
 import { apiRequest } from '../api/client';
+
+const { Text } = Typography;
 
 export type ManagedCustomer = {
   id: string;
@@ -52,6 +54,7 @@ type SupplierDriver = {
   supplierId: string;
   name: string;
   phone?: string | null;
+  telegramId?: string | null;
   idCardNo?: string | null;
   notes?: string | null;
   payee?: string | null;
@@ -423,6 +426,7 @@ export function SupplierManagementPage() {
   ];
 
   const driverColumns = (supplier: Supplier): ColumnsType<SupplierDriver> => [
+    { title: 'Telegram ID', dataIndex: 'telegramId', render: (value) => value || '-' },
     { title: '司机名称', dataIndex: 'name' },
     { title: '司机电话', dataIndex: 'phone' },
     { title: '身份证号', dataIndex: 'idCardNo' },
@@ -562,6 +566,7 @@ export function SupplierManagementPage() {
           <Row gutter={12}>
             <Col span={8}><Form.Item name="name" label="司机名称" rules={[{ required: true, message: '请输入司机名称' }]}><Input /></Form.Item></Col>
             <Col span={8}><Form.Item name="phone" label="司机电话"><Input /></Form.Item></Col>
+            <Col span={8}><Form.Item name="telegramId" label="Telegram ID"><Input placeholder="例如：123456789" /></Form.Item></Col>
             <Col span={8}><Form.Item name="idCardNo" label="身份证号"><Input /></Form.Item></Col>
           </Row>
           <Row gutter={12}>
@@ -586,5 +591,135 @@ export function SupplierManagementPage() {
         </Form>
       </Modal>
     </>
+  );
+}
+
+type SupplierDriverRow = SupplierDriver & {
+  supplierName?: string | null;
+  supplierCode?: string | null;
+  supplierTypes: string[];
+  supplierContactInfo?: string | null;
+};
+
+export function SupplierDriverListPage() {
+  const [suppliers, setSuppliers] = useState<Supplier[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [keyword, setKeyword] = useState('');
+
+  const loadSuppliers = async () => {
+    setLoading(true);
+    try {
+      const result = await apiRequest<{ items: Supplier[] }>('/api/suppliers');
+      setSuppliers(result.items ?? []);
+    } catch (error) {
+      message.error((error as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void loadSuppliers();
+  }, []);
+
+  const rows: SupplierDriverRow[] = suppliers.flatMap((supplier) =>
+    (supplier.drivers ?? []).map((driver) => ({
+      ...driver,
+      supplierName: supplier.name,
+      supplierCode: supplier.supplierCode,
+      supplierTypes: supplierRoleList(supplier),
+      supplierContactInfo: supplier.contactInfo,
+    })),
+  );
+
+  const normalizedKeyword = keyword.trim().toLowerCase();
+  const filteredRows = normalizedKeyword
+    ? rows.filter((row) =>
+          [row.name, row.phone, row.telegramId, row.idCardNo, row.supplierName, row.supplierCode, row.payee, row.bankName].some((value) =>
+          String(value ?? '').toLowerCase().includes(normalizedKeyword),
+        ),
+      )
+    : rows;
+
+  const columns: ColumnsType<SupplierDriverRow> = [
+    {
+      title: '司机名称',
+      dataIndex: 'name',
+      width: 140,
+      fixed: 'left',
+      render: (value) => value || '-',
+    },
+    { title: '司机电话', dataIndex: 'phone', width: 150, render: (value) => value || '-' },
+    { title: 'Telegram ID', dataIndex: 'telegramId', width: 150, render: (value) => value || '-' },
+    { title: '身份证号', dataIndex: 'idCardNo', width: 190, render: (value) => value || '-' },
+    {
+      title: '所属供应商',
+      dataIndex: 'supplierName',
+      width: 240,
+      render: (value, row) => (
+        <Space direction="vertical" size={0}>
+          <Text>{value || '-'}</Text>
+          <Text type="secondary">{row.supplierCode || '-'}</Text>
+        </Space>
+      ),
+    },
+    {
+      title: '供应商类型',
+      dataIndex: 'supplierTypes',
+      width: 180,
+      render: (values: string[]) =>
+        values?.length ? (
+          <Space wrap>
+            {values.map((item) => (
+              <Tag color="blue" key={item}>
+                {item}
+              </Tag>
+            ))}
+          </Space>
+        ) : (
+          '-'
+        ),
+    },
+    { title: '供应商联系方式', dataIndex: 'supplierContactInfo', width: 180, render: (value) => value || '-' },
+    { title: '收款人', dataIndex: 'payee', width: 130, render: (value) => value || '-' },
+    { title: '开户手机', dataIndex: 'bankPhone', width: 150, render: (value) => value || '-' },
+    { title: '银行卡号', dataIndex: 'bankCardNo', width: 190, render: (value) => value || '-' },
+    { title: '开户行', dataIndex: 'bankName', width: 180, render: (value) => value || '-' },
+    { title: '驾驶证', width: 130, render: (_, row) => fileLinks(row.driverLicenseFiles) },
+    { title: '保险', width: 130, render: (_, row) => fileLinks(row.insuranceFiles) },
+    { title: '国际道路运证', width: 150, render: (_, row) => fileLinks(row.internationalRoadPermitFiles) },
+    { title: '备注', dataIndex: 'notes', width: 220, render: (value) => value || '-' },
+  ];
+
+  return (
+    <Card
+      className="glass-card"
+      title="司机列表"
+      bordered={false}
+      extra={
+        <Space>
+          <Input.Search
+            allowClear
+            placeholder="搜索司机 / 电话 / 供应商"
+            value={keyword}
+            onChange={(event) => setKeyword(event.target.value)}
+            style={{ width: 260 }}
+          />
+          <Button icon={<ReloadOutlined />} onClick={() => void loadSuppliers()}>
+            刷新
+          </Button>
+        </Space>
+      }
+    >
+      <Table
+        rowKey="id"
+        loading={loading}
+        dataSource={filteredRows}
+        columns={columns}
+        scroll={{ x: 2450 }}
+        pagination={{ pageSize: 20 }}
+        locale={{ emptyText: <Empty description="暂无司机信息" /> }}
+      />
+    </Card>
   );
 }

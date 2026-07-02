@@ -1,13 +1,10 @@
 name = "ostoa-api"
-main = "src/index.ts"
+main = "dist-worker/index.js"
 compatibility_date = "2026-05-12"
 
 routes = [
   { pattern = "api.ostoa.org", custom_domain = true }
 ]
-
-[triggers]
-crons = ["*/30 * * * *"]
 
 [[d1_databases]]
 binding = "DB"

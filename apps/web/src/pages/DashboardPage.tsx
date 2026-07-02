@@ -8,10 +8,11 @@ import {
   RocketOutlined,
   WalletOutlined,
 } from '@ant-design/icons';
-import { Card, Col, Empty, List, Progress, Row, Space, Statistic, Table, Tag, Timeline, Typography } from 'antd';
+import { Alert, Button, Card, Col, Empty, List, message, Progress, Row, Space, Statistic, Table, Tag, Timeline, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useEffect, useState } from 'react';
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { getSessionUser } from '../api/auth';
 import { apiRequest } from '../api/client';
 import { formatBeijingTime } from '../utils/date';
 
@@ -67,6 +68,16 @@ type DashboardData = {
   }>;
 };
 
+type FeishuBinding = {
+  bound: boolean;
+  employeeMissing?: boolean;
+  employeeName?: string;
+  email?: string;
+  feishuOpenId?: string;
+  feishuUserId?: string;
+  message?: string;
+};
+
 const emptyDashboard: DashboardData = {
   totals: {
     inquiryCount: 0,
@@ -105,6 +116,9 @@ function statusColor(status: string) {
 export function DashboardPage() {
   const [data, setData] = useState<DashboardData>(emptyDashboard);
   const [loading, setLoading] = useState(false);
+  const [feishuBinding, setFeishuBinding] = useState<FeishuBinding | null>(null);
+  const [feishuLoading, setFeishuLoading] = useState(false);
+  const [adminTipLoading, setAdminTipLoading] = useState(false);
 
   const loadData = async () => {
     setLoading(true);
@@ -115,15 +129,82 @@ export function DashboardPage() {
     }
   };
 
+  const loadFeishuBinding = async () => {
+    try {
+      setFeishuBinding(await apiRequest<FeishuBinding>('/api/feishu/binding'));
+    } catch (error) {
+      setFeishuBinding({ bound: false, message: (error as Error).message });
+    }
+  };
+
+  const cleanFeishuCallbackUrl = () => {
+    const url = new URL(window.location.href);
+    url.searchParams.delete('code');
+    url.searchParams.delete('state');
+    window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`);
+  };
+
+  const bindFeishuWithCode = async (code: string) => {
+    setFeishuLoading(true);
+    try {
+      const redirectUri = `${window.location.origin}${window.location.pathname}`;
+      await apiRequest('/api/feishu/bind', {
+        method: 'POST',
+        body: JSON.stringify({ code, redirectUri }),
+      });
+      message.success('飞书账号已绑定');
+      cleanFeishuCallbackUrl();
+      await loadFeishuBinding();
+    } catch (error) {
+      message.error((error as Error).message);
+    } finally {
+      setFeishuLoading(false);
+    }
+  };
+
+  const startFeishuBind = async () => {
+    setFeishuLoading(true);
+    try {
+      const redirect = `${window.location.origin}${window.location.pathname}`;
+      const result = await apiRequest<{ authUrl: string }>(`/api/feishu/auth-url?redirect=${encodeURIComponent(redirect)}&state=feishu-bind`);
+      window.location.href = result.authUrl;
+    } catch (error) {
+      message.error((error as Error).message);
+      setFeishuLoading(false);
+    }
+  };
+
+  const sendAdminTip = async () => {
+    setAdminTipLoading(true);
+    try {
+      const result = await apiRequest<{ sent?: number; failed?: number }>('/api/dashboard/admin-tip', { method: 'POST' });
+      message.success(`提示已发送给 ${result.sent ?? 0} 位管理员。`);
+    } catch (error) {
+      message.error((error as Error).message);
+    } finally {
+      setAdminTipLoading(false);
+    }
+  };
+
   useEffect(() => {
     void loadData();
+    void loadFeishuBinding();
+  }, []);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const code = params.get('code');
+    const state = params.get('state');
+    if (code && state === 'feishu-bind') {
+      void bindFeishuWithCode(code);
+    }
   }, []);
 
   const taskColumns: ColumnsType<DashboardData['recentTasks'][number]> = [
     { title: '任务号', dataIndex: 'taskNo', width: 170 },
     { title: '客户', dataIndex: 'customerName', width: 150, render: (value) => value || '-' },
     { title: '项目', dataIndex: 'projectName', width: 180, render: (value) => value || '-' },
-    { title: '当前节点', dataIndex: 'currentNode', width: 120, render: (value) => value ? <Tag color="blue">{value}</Tag> : '-' },
+    { title: '当前节点', dataIndex: 'currentNode', width: 120, render: (value) => (value ? <Tag color="blue">{value}</Tag> : '-') },
     { title: '状态', dataIndex: 'status', width: 110, render: (value) => <Tag color={statusColor(value)}>{value}</Tag> },
     { title: '进度', dataIndex: 'progress', width: 140, render: (value) => <Progress percent={Number(value ?? 0)} size="small" /> },
   ];
@@ -142,6 +223,11 @@ export function DashboardPage() {
             <Text type="secondary">聚合询单、项目、运输任务、流程待办、轨迹与财务毛利。</Text>
           </Col>
           <Col xs={24} lg={12}>
+            <div style={{ textAlign: 'right', marginBottom: 12 }}>
+              <Button type="primary" loading={adminTipLoading} onClick={sendAdminTip}>
+                提示
+              </Button>
+            </div>
             <Row gutter={[12, 12]}>
               <Col span={8}>
                 <Statistic title="待报价" value={data.totals.pendingQuoteCount} prefix={<FileTextOutlined />} />
@@ -157,24 +243,65 @@ export function DashboardPage() {
         </Row>
       </Card>
 
+      <Card className="glass-card" bordered={false}>
+        <Row gutter={[16, 16]} align="middle">
+          <Col xs={24} lg={16}>
+            <Space direction="vertical" size={4}>
+              <Text strong>飞书绑定</Text>
+              {feishuBinding?.bound ? (
+                <Text type="secondary">
+                  当前员工 {feishuBinding.employeeName || getSessionUser()?.realName || '-'} 已绑定飞书，可接收流程待办、节点催办和流转提醒。
+                </Text>
+              ) : (
+                <Text type="secondary">当前账号尚未绑定飞书。绑定后，节点待办和催办消息会直接推送到对应员工飞书。</Text>
+              )}
+              {feishuBinding?.message ? <Alert type="warning" showIcon message={feishuBinding.message} /> : null}
+            </Space>
+          </Col>
+          <Col xs={24} lg={8} style={{ textAlign: 'right' }}>
+            {feishuBinding?.bound ? (
+              <Tag color="green" style={{ padding: '6px 12px' }}>
+                已绑定
+              </Tag>
+            ) : (
+              <Button type="primary" loading={feishuLoading} onClick={startFeishuBind}>
+                绑定飞书
+              </Button>
+            )}
+          </Col>
+        </Row>
+      </Card>
+
       <Row gutter={[16, 16]}>
         <Col xs={24} sm={12} xl={4}>
-          <Card className="metric-card"><Statistic title="询单总数" value={data.totals.inquiryCount} prefix={<FileTextOutlined />} /></Card>
+          <Card className="metric-card">
+            <Statistic title="询单总数" value={data.totals.inquiryCount} prefix={<FileTextOutlined />} />
+          </Card>
         </Col>
         <Col xs={24} sm={12} xl={4}>
-          <Card className="metric-card"><Statistic title="项目管理" value={data.totals.projectCount} prefix={<ProjectOutlined />} /></Card>
+          <Card className="metric-card">
+            <Statistic title="项目管理" value={data.totals.projectCount} prefix={<ProjectOutlined />} />
+          </Card>
         </Col>
         <Col xs={24} sm={12} xl={4}>
-          <Card className="metric-card"><Statistic title="运输任务" value={data.totals.taskCount} prefix={<RocketOutlined />} /></Card>
+          <Card className="metric-card">
+            <Statistic title="运输任务" value={data.totals.taskCount} prefix={<RocketOutlined />} />
+          </Card>
         </Col>
         <Col xs={24} sm={12} xl={4}>
-          <Card className="metric-card"><Statistic title="进行中任务" value={data.totals.activeTaskCount} prefix={<FundOutlined />} /></Card>
+          <Card className="metric-card">
+            <Statistic title="进行中任务" value={data.totals.activeTaskCount} prefix={<FundOutlined />} />
+          </Card>
         </Col>
         <Col xs={24} sm={12} xl={4}>
-          <Card className="metric-card"><Statistic title="异常记录" value={data.totals.exceptionCount} prefix={<AlertOutlined />} /></Card>
+          <Card className="metric-card">
+            <Statistic title="异常记录" value={data.totals.exceptionCount} prefix={<AlertOutlined />} />
+          </Card>
         </Col>
         <Col xs={24} sm={12} xl={4}>
-          <Card className="metric-card"><Statistic title="待收/待付" value={`${money(data.finance.unreceived)} / ${money(data.finance.unpaid)}`} suffix="CNY" /></Card>
+          <Card className="metric-card">
+            <Statistic title="待收/待付" value={`${money(data.finance.unreceived)} / ${money(data.finance.unpaid)}`} suffix="CNY" />
+          </Card>
         </Col>
       </Row>
 
@@ -193,21 +320,31 @@ export function DashboardPage() {
                   </BarChart>
                 </ResponsiveContainer>
               </div>
-            ) : <Empty description="暂无节点任务" />}
+            ) : (
+              <Empty description="暂无节点任务" />
+            )}
           </Card>
         </Col>
         <Col xs={24} xl={10}>
           <Card className="glass-card" title="财务概览" bordered={false}>
             <Space direction="vertical" size={16} style={{ width: '100%' }}>
               <Row gutter={12}>
-                <Col span={12}><Statistic title="已确认应收" value={data.finance.confirmedReceivable} precision={2} suffix="CNY" /></Col>
-                <Col span={12}><Statistic title="已确认应付" value={data.finance.confirmedPayable} precision={2} suffix="CNY" /></Col>
+                <Col span={12}>
+                  <Statistic title="已确认应收" value={data.finance.confirmedReceivable} precision={2} suffix="CNY" />
+                </Col>
+                <Col span={12}>
+                  <Statistic title="已确认应付" value={data.finance.confirmedPayable} precision={2} suffix="CNY" />
+                </Col>
               </Row>
               <Progress
-                percent={data.finance.confirmedReceivable ? Math.max(0, Math.min(100, Math.round((data.finance.grossProfit / data.finance.confirmedReceivable) * 100))) : 0}
+                percent={
+                  data.finance.confirmedReceivable
+                    ? Math.max(0, Math.min(100, Math.round((data.finance.grossProfit / data.finance.confirmedReceivable) * 100)))
+                    : 0
+                }
                 strokeColor="#22c55e"
               />
-              <Text type="secondary">毛利率按已确认应收/应付测算，后续可再细分到项目、客户和业务员。</Text>
+              <Text type="secondary">毛利率按已确认应收和应付测算，后续可细分到项目、客户和业务员。</Text>
             </Space>
           </Card>
         </Col>
@@ -229,7 +366,7 @@ export function DashboardPage() {
                   <List.Item.Meta
                     avatar={<ClockCircleOutlined style={{ color: '#1677ff' }} />}
                     title={<span>{item.title}</span>}
-                    description={`${item.customerName || '-'} · ${item.taskNo || '-'} · ${item.nodeName || '-'}`}
+                    description={`${item.customerName || '-'} / ${item.taskNo || '-'} / ${item.nodeName || '-'}`}
                   />
                   <Tag color={statusColor(item.status)}>{item.status}</Tag>
                 </List.Item>
@@ -246,14 +383,20 @@ export function DashboardPage() {
               dot: <CheckCircleOutlined />,
               children: (
                 <Space direction="vertical" size={2}>
-                  <Text strong>{item.taskNo} · {item.nodeName} · {item.trackingStatus || '跟踪记录'}</Text>
+                  <Text strong>
+                    {item.taskNo} / {item.nodeName} / {item.trackingStatus || '跟踪记录'}
+                  </Text>
                   <Text>{item.content}</Text>
-                  <Text type="secondary">{item.location || '-'} · {formatBeijingTime(item.trackedAt, true)}</Text>
+                  <Text type="secondary">
+                    {item.location || '-'} / {formatBeijingTime(item.trackedAt, true)}
+                  </Text>
                 </Space>
               ),
             }))}
           />
-        ) : <Empty description="暂无轨迹记录" />}
+        ) : (
+          <Empty description="暂无轨迹记录" />
+        )}
       </Card>
     </Space>
   );

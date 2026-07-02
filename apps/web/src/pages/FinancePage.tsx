@@ -25,6 +25,7 @@ import {
   Typography,
   message,
 } from 'antd';
+import type { TabsProps } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useEffect, useMemo, useState } from 'react';
 import type { Key } from 'react';
@@ -35,6 +36,11 @@ const { Text } = Typography;
 const { TextArea } = Input;
 
 type FinanceDirection = 'receivable' | 'payable';
+type FinanceTabKey = 'receivable' | 'payable' | 'bills' | 'payments';
+
+type FinancePageProps = {
+  activeTab?: FinanceTabKey;
+};
 
 type FinanceItem = {
   id: string;
@@ -100,7 +106,20 @@ type FinanceContext = {
   suppliers: Array<{ id: string; name: string; supplierCode?: string | null; type?: string | null }>;
 };
 
-const currencies = ['CNY', 'USD', 'KZT', 'RUB'];
+type ExchangeRateOption = {
+  id: string;
+  currencyCode: string;
+  currencyName?: string | null;
+  rateToCny: number;
+  enabled: boolean;
+};
+
+const fallbackExchangeRates: ExchangeRateOption[] = [
+  { id: 'exr_cny', currencyCode: 'CNY', currencyName: 'CNY', rateToCny: 1, enabled: true },
+  { id: 'exr_usd', currencyCode: 'USD', currencyName: 'USD', rateToCny: 7.2, enabled: true },
+  { id: 'exr_kzt', currencyCode: 'KZT', currencyName: 'KZT', rateToCny: 0.015, enabled: true },
+  { id: 'exr_rub', currencyCode: 'RUB', currencyName: 'RUB', rateToCny: 0.08, enabled: true },
+];
 const feeStatuses = [
   { value: 'draft', label: '草稿' },
   { value: 'confirmed', label: '已确认' },
@@ -148,12 +167,13 @@ function statusTag(status: string) {
   return <Tag color={statusColor[status] ?? 'default'}>{statusText[status] ?? status}</Tag>;
 }
 
-export function FinancePage() {
+export function FinancePage({ activeTab }: FinancePageProps = {}) {
   const [loading, setLoading] = useState(false);
   const [items, setItems] = useState<FinanceItem[]>([]);
   const [bills, setBills] = useState<FinanceBill[]>([]);
   const [paymentRequests, setPaymentRequests] = useState<PaymentRequest[]>([]);
   const [context, setContext] = useState<FinanceContext>({ tasks: [], customers: [], suppliers: [] });
+  const [exchangeRates, setExchangeRates] = useState<ExchangeRateOption[]>([]);
   const [summary, setSummary] = useState({ confirmedReceivable: 0, confirmedPayable: 0, grossProfit: 0, unreceived: 0, unpaid: 0 });
   const [feeOpen, setFeeOpen] = useState(false);
   const [billOpen, setBillOpen] = useState(false);
@@ -170,23 +190,39 @@ export function FinancePage() {
   const watchedRate = Form.useWatch('exchangeRate', feeForm);
 
   const selectedTask = useMemo(() => context.tasks.find((task) => task.id === watchedTaskId), [context.tasks, watchedTaskId]);
+  const activeExchangeRates = useMemo(() => {
+    const source = exchangeRates.length ? exchangeRates : fallbackExchangeRates;
+    return source.filter((item) => item.enabled !== false);
+  }, [exchangeRates]);
+  const currencyOptions = useMemo(
+    () =>
+      activeExchangeRates.map((item) => ({
+        value: item.currencyCode,
+        label: item.currencyName ? `${item.currencyCode} / ${item.currencyName}` : item.currencyCode,
+      })),
+    [activeExchangeRates],
+  );
+  const exchangeRateForCurrency = (code?: string) =>
+    activeExchangeRates.find((item) => item.currencyCode === code)?.rateToCny ?? (code === 'CNY' ? 1 : undefined);
   const selectedAmountCny = Number(watchedAmount || 0) * Number(watchedRate || 1);
 
   const loadData = async () => {
     setLoading(true);
     try {
-      const [itemRes, billRes, payRes, contextRes, summaryRes] = await Promise.all([
+      const [itemRes, billRes, payRes, contextRes, summaryRes, exchangeRateRes] = await Promise.all([
         apiRequest<{ items: FinanceItem[] }>('/api/finance/items'),
         apiRequest<{ items: FinanceBill[] }>('/api/finance/bills'),
         apiRequest<{ items: PaymentRequest[] }>('/api/finance/payment-requests'),
         apiRequest<FinanceContext>('/api/finance/context'),
         apiRequest<typeof summary>('/api/finance/summary'),
+        apiRequest<{ items: ExchangeRateOption[] }>('/api/exchange-rates'),
       ]);
       setItems(itemRes.items ?? []);
       setBills(billRes.items ?? []);
       setPaymentRequests(payRes.items ?? []);
       setContext(contextRes);
       setSummary(summaryRes);
+      setExchangeRates(exchangeRateRes.items ?? []);
     } finally {
       setLoading(false);
     }
@@ -197,13 +233,14 @@ export function FinancePage() {
   }, []);
 
   const openFee = (direction: FinanceDirection, record?: FinanceItem) => {
+    const defaultCurrency = record?.currency ?? (direction === 'receivable' ? 'USD' : 'CNY');
     setEditingFee(record ?? null);
     feeForm.resetFields();
     feeForm.setFieldsValue(
       record ?? {
         direction,
-        currency: direction === 'receivable' ? 'USD' : 'CNY',
-        exchangeRate: 1,
+        currency: defaultCurrency,
+        exchangeRate: exchangeRateForCurrency(defaultCurrency) ?? 1,
         status: 'confirmed',
         sourceType: 'manual',
       },
@@ -374,6 +411,91 @@ export function FinancePage() {
   const payables = items.filter((item) => item.direction === 'payable');
   const billableReceivables = receivables.filter((item) => item.status === 'confirmed' && !item.billId);
   const payableForRequest = payables.filter((item) => item.status === 'confirmed' && !item.paymentRequestId);
+  const financeTabItems: TabsProps['items'] = [
+    {
+      key: 'receivable',
+      label: '\u5e94\u6536\u8d39\u7528',
+      children: (
+        <Space direction="vertical" size={12} style={{ width: '100%' }}>
+          <Space>
+            <Button type="primary" icon={<PlusOutlined />} onClick={() => openFee('receivable')}>
+              {'\u65b0\u589e\u5e94\u6536'}
+            </Button>
+            <Button
+              icon={<WalletOutlined />}
+              disabled={!selectedReceivables.length}
+              onClick={() => {
+                billForm.resetFields();
+                billForm.setFieldsValue({ title: '\u5ba2\u6237\u8d26\u5355 ' + formatBeijingTime(new Date().toISOString()).slice(0, 10) });
+                setBillOpen(true);
+              }}
+            >
+              {'\u751f\u6210\u5ba2\u6237\u8d26\u5355'}
+            </Button>
+          </Space>
+          <Table
+            rowKey="id"
+            loading={loading}
+            dataSource={receivables}
+            columns={itemColumns}
+            scroll={{ x: 1680 }}
+            rowSelection={{
+              selectedRowKeys: selectedReceivables,
+              onChange: setSelectedReceivables,
+              getCheckboxProps: (record) => ({ disabled: !billableReceivables.some((item) => item.id === record.id) }),
+            }}
+          />
+        </Space>
+      ),
+    },
+    {
+      key: 'payable',
+      label: '\u5e94\u4ed8\u8d39\u7528',
+      children: (
+        <Space direction="vertical" size={12} style={{ width: '100%' }}>
+          <Space>
+            <Button type="primary" icon={<PlusOutlined />} onClick={() => openFee('payable')}>
+              {'\u65b0\u589e\u5e94\u4ed8'}
+            </Button>
+            <Button
+              icon={<CheckCircleOutlined />}
+              disabled={!selectedPayables.length}
+              onClick={() => {
+                paymentForm.resetFields();
+                paymentForm.setFieldsValue({ title: '\u4ed8\u6b3e\u7533\u8bf7 ' + formatBeijingTime(new Date().toISOString()).slice(0, 10) });
+                setPaymentOpen(true);
+              }}
+            >
+              {'\u63d0\u4ea4\u4ed8\u6b3e\u7533\u8bf7'}
+            </Button>
+          </Space>
+          <Table
+            rowKey="id"
+            loading={loading}
+            dataSource={payables}
+            columns={itemColumns}
+            scroll={{ x: 1680 }}
+            rowSelection={{
+              selectedRowKeys: selectedPayables,
+              onChange: setSelectedPayables,
+              getCheckboxProps: (record) => ({ disabled: !payableForRequest.some((item) => item.id === record.id) }),
+            }}
+          />
+        </Space>
+      ),
+    },
+    {
+      key: 'bills',
+      label: '\u5ba2\u6237\u8d26\u5355',
+      children: <Table rowKey="id" loading={loading} dataSource={bills} columns={billColumns} scroll={{ x: 1100 }} />,
+    },
+    {
+      key: 'payments',
+      label: '\u4ed8\u6b3e\u7533\u8bf7',
+      children: <Table rowKey="id" loading={loading} dataSource={paymentRequests} columns={paymentColumns} scroll={{ x: 1150 }} />,
+    },
+  ];
+  const activeFinanceTab = activeTab ? financeTabItems.find((item) => item.key === activeTab) : undefined;
 
   return (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
@@ -395,97 +517,19 @@ export function FinancePage() {
         </Col>
         <Col xs={24} md={6}>
           <Card className="metric-card">
-            <Statistic title="待收/待付" value={`${money(summary.unreceived)} / ${money(summary.unpaid)}`} suffix="CNY" />
+            <Statistic title="待收/待付" value={money(summary.unreceived) + ' / ' + money(summary.unpaid)} suffix="CNY" />
           </Card>
         </Col>
       </Row>
 
       <Card
         className="glass-card"
-        title="财务管理"
+        title={activeFinanceTab?.label ?? '\u8d22\u52a1\u7ba1\u7406'}
         bordered={false}
-        extra={<Button icon={<ReloadOutlined />} onClick={() => void loadData()} loading={loading}>刷新</Button>}
+        extra={<Button icon={<ReloadOutlined />} onClick={() => void loadData()} loading={loading}>{'\u5237\u65b0'}</Button>}
       >
-        <Tabs
-          items={[
-            {
-              key: 'receivable',
-              label: '应收费用',
-              children: (
-                <Space direction="vertical" size={12} style={{ width: '100%' }}>
-                  <Space>
-                    <Button type="primary" icon={<PlusOutlined />} onClick={() => openFee('receivable')}>
-                      新增应收
-                    </Button>
-                    <Button icon={<WalletOutlined />} disabled={!selectedReceivables.length} onClick={() => {
-                      billForm.resetFields();
-                      billForm.setFieldsValue({ title: `客户账单 ${formatBeijingTime(new Date().toISOString()).slice(0, 10)}` });
-                      setBillOpen(true);
-                    }}>
-                      生成客户账单
-                    </Button>
-                  </Space>
-                  <Table
-                    rowKey="id"
-                    loading={loading}
-                    dataSource={receivables}
-                    columns={itemColumns}
-                    scroll={{ x: 1680 }}
-                    rowSelection={{
-                      selectedRowKeys: selectedReceivables,
-                      onChange: setSelectedReceivables,
-                      getCheckboxProps: (record) => ({ disabled: !billableReceivables.some((item) => item.id === record.id) }),
-                    }}
-                  />
-                </Space>
-              ),
-            },
-            {
-              key: 'payable',
-              label: '应付费用',
-              children: (
-                <Space direction="vertical" size={12} style={{ width: '100%' }}>
-                  <Space>
-                    <Button type="primary" icon={<PlusOutlined />} onClick={() => openFee('payable')}>
-                      新增应付
-                    </Button>
-                    <Button icon={<CheckCircleOutlined />} disabled={!selectedPayables.length} onClick={() => {
-                      paymentForm.resetFields();
-                      paymentForm.setFieldsValue({ title: `付款申请 ${formatBeijingTime(new Date().toISOString()).slice(0, 10)}` });
-                      setPaymentOpen(true);
-                    }}>
-                      提交付款申请
-                    </Button>
-                  </Space>
-                  <Table
-                    rowKey="id"
-                    loading={loading}
-                    dataSource={payables}
-                    columns={itemColumns}
-                    scroll={{ x: 1680 }}
-                    rowSelection={{
-                      selectedRowKeys: selectedPayables,
-                      onChange: setSelectedPayables,
-                      getCheckboxProps: (record) => ({ disabled: !payableForRequest.some((item) => item.id === record.id) }),
-                    }}
-                  />
-                </Space>
-              ),
-            },
-            {
-              key: 'bills',
-              label: '客户账单',
-              children: <Table rowKey="id" loading={loading} dataSource={bills} columns={billColumns} scroll={{ x: 1100 }} />,
-            },
-            {
-              key: 'payments',
-              label: '付款申请',
-              children: <Table rowKey="id" loading={loading} dataSource={paymentRequests} columns={paymentColumns} scroll={{ x: 1150 }} />,
-            },
-          ]}
-        />
+        {activeFinanceTab?.children ?? <Tabs items={financeTabItems} />}
       </Card>
-
       <Modal title={editingFee ? '修改费用' : watchedDirection === 'payable' ? '新增应付费用' : '新增应收费用'} open={feeOpen} onCancel={() => setFeeOpen(false)} onOk={() => feeForm.submit()} width={860} okText="保存">
         <Form form={feeForm} layout="vertical" onFinish={(values) => void saveFee(values)}>
           <Row gutter={16}>
@@ -525,7 +569,13 @@ export function FinancePage() {
             </Col>
             <Col span={6}>
               <Form.Item name="currency" label="币种" rules={[{ required: true }]}>
-                <Select options={currencies.map((item) => ({ value: item, label: item }))} />
+                <Select
+                  options={currencyOptions}
+                  onChange={(value) => {
+                    const rate = exchangeRateForCurrency(value);
+                    if (rate) feeForm.setFieldValue('exchangeRate', rate);
+                  }}
+                />
               </Form.Item>
             </Col>
             <Col span={6}>

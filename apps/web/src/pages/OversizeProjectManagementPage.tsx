@@ -91,6 +91,28 @@ type SupplierOption = {
   drivers?: SupplierDriverOption[];
 };
 
+type GpsProviderOption = {
+  id: string;
+  shortName: string;
+  name: string;
+  enabled: boolean;
+};
+
+type ExchangeRateOption = {
+  id: string;
+  currencyCode: string;
+  currencyName?: string | null;
+  rateToCny: number;
+  enabled: boolean;
+};
+
+const fallbackExchangeRates: ExchangeRateOption[] = [
+  { id: 'exr_cny', currencyCode: 'CNY', currencyName: 'CNY', rateToCny: 1, enabled: true },
+  { id: 'exr_usd', currencyCode: 'USD', currencyName: 'USD', rateToCny: 7.2, enabled: true },
+  { id: 'exr_kzt', currencyCode: 'KZT', currencyName: 'KZT', rateToCny: 0.015, enabled: true },
+  { id: 'exr_rub', currencyCode: 'RUB', currencyName: 'RUB', rateToCny: 0.08, enabled: true },
+];
+
 type WorkflowTemplateNodeOption = {
   id: string;
   nodeName: string;
@@ -129,6 +151,8 @@ type OversizeTask = {
   driverPhone?: string | null;
   cargoSummary?: string | null;
   plannedDepartureDate?: string | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
   status: string;
   progress: number;
   notes?: string | null;
@@ -137,6 +161,8 @@ type OversizeTask = {
   workflowCurrentNodeId?: string | null;
   workflowCurrentNodeName?: string | null;
   workflowCurrentNodeStatus?: string | null;
+  workflowCurrentNodeOwner?: string | null;
+  workflowCurrentNodeOwnerRoleName?: string | null;
   nodes: OversizeTaskNode[];
   workflowNodes?: WorkflowInstanceNode[];
 };
@@ -198,6 +224,11 @@ type WorkflowInstanceNode = {
   supplierTypes?: string[];
   requireVehicle: boolean;
   requireDriver: boolean;
+  requireGps: boolean;
+  gpsProviderId?: string | null;
+  gpsProviderShortName?: string | null;
+  gpsProviderName?: string | null;
+  gpsDeviceNo?: string | null;
   supplierId?: string | null;
   supplierName?: string | null;
   supplierType?: string | null;
@@ -215,6 +246,8 @@ type WorkflowInstanceNode = {
   plannedEndAt?: string | null;
   plannedDurationHours?: number | null;
   warningBeforeHours?: number | null;
+  workingTimeRuleId?: string | null;
+  workingTimeRuleName?: string | null;
   scheduleRemark?: string | null;
   scheduleUpdatedAt?: string | null;
   startedAt?: string | null;
@@ -253,6 +286,12 @@ type WorkflowInstance = {
   nodes: WorkflowInstanceNode[];
   transitions: WorkflowTransition[];
   trackingRecords?: WorkflowTrackingRecord[];
+};
+
+type SchedulePredictionResult = {
+  baseTime: string;
+  applied?: boolean;
+  items: WorkflowInstanceNode[];
 };
 
 type TaskCostItem = {
@@ -309,6 +348,7 @@ type OversizeProject = {
   name: string;
   customerId?: string | null;
   customerName?: string | null;
+  customerShortName?: string | null;
   origin: string;
   destination: string;
   startDate?: string | null;
@@ -379,8 +419,20 @@ const statusColor: Record<string, string> = {
 };
 
 const fileUrl = (url: string) => {
+  if (!url) return '';
   if (url.startsWith('http')) return url;
-  return url;
+  const configuredApiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? 'https://api.ostoa.org';
+  const isLocalBrowser =
+    typeof window !== 'undefined' &&
+    (window.location.hostname === '127.0.0.1' ||
+      window.location.hostname === 'localhost' ||
+      window.location.hostname.startsWith('192.168.'));
+  return isLocalBrowser ? url : `${configuredApiBaseUrl}${url}`;
+};
+
+const singleSelectText = (value: unknown) => {
+  if (Array.isArray(value)) return String(value[value.length - 1] ?? '').trim();
+  return String(value ?? '').trim();
 };
 
 const toDateValue = (value?: string | null) => (value ? dayjs(value) : undefined);
@@ -400,6 +452,19 @@ const isCompletedTask = (task?: Pick<OversizeTask, 'status' | 'workflowStatus' |
 const supplierRoleList = (supplier?: Pick<SupplierOption, 'type' | 'types'> | null) => {
   const values = [...(supplier?.types ?? []), supplier?.type].map((item) => String(item ?? '').trim()).filter(Boolean);
   return [...new Set(values)];
+};
+const workflowValueMap = (node?: Pick<WorkflowInstanceNode, 'formValues'> | null) =>
+  Object.fromEntries((node?.formValues ?? []).map((item) => [item.fieldKey, item.fieldValue ?? '']));
+const workflowGpsDeviceNo = (node?: Pick<WorkflowInstanceNode, 'formValues' | 'gpsDeviceNo'> | null) => {
+  const values = workflowValueMap(node);
+  return String(values.gpsDeviceNo || values.gpsDeviceId || values.deviceNo || node?.gpsDeviceNo || '').trim();
+};
+const shouldShowGpsFields = (
+  node?: Pick<WorkflowInstanceNode, 'requireGps' | 'formValues' | 'gpsProviderId' | 'gpsDeviceNo'> | null,
+) => Boolean(node?.requireGps) || Boolean(node?.gpsProviderId || node?.gpsDeviceNo || workflowGpsDeviceNo(node));
+const workflowGpsFieldMeta: Record<string, { fieldName: string; fieldType: string }> = {
+  gpsProviderId: { fieldName: 'GPS服务商', fieldType: 'select' },
+  gpsDeviceNo: { fieldName: 'GPS设备号', fieldType: 'text' },
 };
 
 export function OversizeProjectManagementPage({ customers }: OversizeProjectManagementPageProps) {
@@ -773,7 +838,15 @@ export function OversizeProjectManagementPage({ customers }: OversizeProjectMana
     {
       title: '当前节点',
       width: 130,
-      render: (_, record) => <Tag color={record.workflowCurrentNodeStatus === '异常' ? 'error' : 'processing'}>{record.workflowCurrentNodeName || '-'}</Tag>,
+      render: (_, record) => {
+        const owner = resolveTaskOwner(record);
+        return (
+          <Space direction="vertical" size={2}>
+            <Tag color={record.workflowCurrentNodeStatus === '异常' ? 'error' : 'processing'}>{record.workflowCurrentNodeName || '-'}</Tag>
+            {owner ? <span style={{ color: '#64748b', fontSize: 12, lineHeight: 1.2 }}>{owner}</span> : null}
+          </Space>
+        );
+      },
     },
     { title: '进度', dataIndex: 'progress', width: 140, render: (value) => <Progress percent={Number(value) || 0} size="small" /> },
     {
@@ -1259,6 +1332,7 @@ type OversizeTaskListItem = OversizeTask & {
   projectNo: string;
   projectName: string;
   customerName?: string | null;
+  customerShortName?: string | null;
 };
 
 type OversizeTaskOpenRequest = {
@@ -1267,10 +1341,29 @@ type OversizeTaskOpenRequest = {
   requestId: number;
 };
 
+const resolveTaskOwner = (task: OversizeTask | OversizeTaskListItem) => {
+  if (task.workflowCurrentNodeOwner) return task.workflowCurrentNodeOwner;
+  const currentWorkflowNode = task.workflowNodes?.find((node) => node.id === task.workflowCurrentNodeId);
+  return currentWorkflowNode?.owner || '';
+};
+
+const taskCreatedAtValue = (task: Pick<OversizeTask, 'createdAt' | 'taskNo'>) => {
+  if (task.createdAt) {
+    const timestamp = Date.parse(task.createdAt.includes('T') ? task.createdAt : task.createdAt.replace(' ', 'T'));
+    if (Number.isFinite(timestamp)) return timestamp;
+  }
+  const match = task.taskNo.match(/TASK-(\d{8})-/);
+  if (!match) return 0;
+  const raw = match[1];
+  return Date.parse(`${raw.slice(0, 4)}-${raw.slice(4, 6)}-${raw.slice(6, 8)}T00:00:00+08:00`) || 0;
+};
+
 export function OversizeTaskManagementPage({ openRequest }: { openRequest?: OversizeTaskOpenRequest | null }) {
   const [projects, setProjects] = useState<OversizeProject[]>([]);
   const [employees, setEmployees] = useState<EmployeeOption[]>([]);
   const [suppliers, setSuppliers] = useState<SupplierOption[]>([]);
+  const [gpsProviders, setGpsProviders] = useState<GpsProviderOption[]>([]);
+  const [exchangeRates, setExchangeRates] = useState<ExchangeRateOption[]>([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [taskModal, setTaskModal] = useState<FormMode<OversizeTaskListItem>>({ open: false });
@@ -1279,6 +1372,9 @@ export function OversizeTaskManagementPage({ openRequest }: { openRequest?: Over
   const [workflowLoading, setWorkflowLoading] = useState(false);
   const [workflowNodeModal, setWorkflowNodeModal] = useState<FormMode<WorkflowInstanceNode>>({ open: false });
   const [scheduleModalOpen, setScheduleModalOpen] = useState(false);
+  const [schedulePredicting, setSchedulePredicting] = useState(false);
+  const [schedulePrediction, setSchedulePrediction] = useState<SchedulePredictionResult | null>(null);
+  const [schedulePredictionApplying, setSchedulePredictionApplying] = useState(false);
   const [trackingModal, setTrackingModal] = useState<FormMode<WorkflowTrackingRecord> & { node?: WorkflowInstanceNode | null }>({ open: false });
   const [costItems, setCostItems] = useState<TaskCostItem[]>([]);
   const [costModal, setCostModal] = useState<FormMode<TaskCostItem>>({ open: false });
@@ -1298,8 +1394,24 @@ export function OversizeTaskManagementPage({ openRequest }: { openRequest?: Over
   const [costForm] = Form.useForm();
   const selectedWorkflowSupplierId = Form.useWatch('supplierId', workflowForm);
   const selectedWorkflowVehicleId = Form.useWatch('supplierVehicleId', workflowForm);
+  const selectedWorkflowDriverId = Form.useWatch('supplierDriverId', workflowForm);
   const selectedWorkflowSupplier = suppliers.find((item) => item.id === selectedWorkflowSupplierId);
-  const selectedWorkflowVehicle = selectedWorkflowSupplier?.vehicles?.find((item) => item.id === selectedWorkflowVehicleId);
+  const selectedWorkflowVehicle = selectedWorkflowSupplier?.vehicles?.find((item) => item.id === singleSelectText(selectedWorkflowVehicleId));
+  const activeGpsProviders = gpsProviders.filter((item) => item.enabled);
+  const activeExchangeRates = useMemo(() => {
+    const source = exchangeRates.length ? exchangeRates : fallbackExchangeRates;
+    return source.filter((item) => item.enabled !== false);
+  }, [exchangeRates]);
+  const currencyOptions = useMemo(
+    () =>
+      activeExchangeRates.map((item) => ({
+        value: item.currencyCode,
+        label: item.currencyName ? `${item.currencyCode} / ${item.currencyName}` : item.currencyCode,
+      })),
+    [activeExchangeRates],
+  );
+  const exchangeRateForCurrency = (code?: string) =>
+    activeExchangeRates.find((item) => item.currencyCode === code)?.rateToCny ?? (code === 'CNY' ? 1 : undefined);
 
   const employeeSelectOptions = useMemo(
     () =>
@@ -1314,14 +1426,17 @@ export function OversizeTaskManagementPage({ openRequest }: { openRequest?: Over
 
   const tasks = useMemo(
     () =>
-      projects.flatMap((project) =>
-        project.tasks.map((task) => ({
-          ...task,
-          projectNo: project.projectNo,
-          projectName: project.name,
-          customerName: project.customerName,
-        })),
-      ),
+      projects
+        .flatMap((project) =>
+          project.tasks.map((task) => ({
+            ...task,
+            projectNo: project.projectNo,
+            projectName: project.name,
+            customerName: project.customerName,
+            customerShortName: project.customerShortName || project.customerName,
+          })),
+        )
+        .sort((a, b) => taskCreatedAtValue(b) - taskCreatedAtValue(a) || b.taskNo.localeCompare(a.taskNo)),
     [projects],
   );
 
@@ -1361,7 +1476,13 @@ export function OversizeTaskManagementPage({ openRequest }: { openRequest?: Over
     return (activeFollowStatus ? tasks.filter((task) => currentTaskNode(task) === activeFollowStatus) : tasks).filter((task) => {
       const nodeName = currentTaskNode(task);
       if (taskNoKeyword && !normalize(task.taskNo).includes(taskNoKeyword)) return false;
-      if (customerKeyword && !normalize(task.customerName).includes(customerKeyword)) return false;
+      if (
+        customerKeyword &&
+        !normalize(task.customerShortName).includes(customerKeyword) &&
+        !normalize(task.customerName).includes(customerKeyword)
+      ) {
+        return false;
+      }
       if (projectKeyword && !normalize(task.projectName).includes(projectKeyword) && !normalize(task.projectNo).includes(projectKeyword)) return false;
       if (taskFilters.status && task.status !== taskFilters.status) return false;
       if (taskFilters.currentNode && nodeName !== taskFilters.currentNode) return false;
@@ -1382,14 +1503,18 @@ export function OversizeTaskManagementPage({ openRequest }: { openRequest?: Over
   const loadTasks = async () => {
     setLoading(true);
     try {
-      const [projectResult, employeeResult, supplierResult] = await Promise.all([
+      const [projectResult, employeeResult, supplierResult, gpsProviderResult, exchangeRateResult] = await Promise.all([
         apiRequest<{ items: OversizeProject[] }>('/api/oversize-projects'),
         apiRequest<{ items: EmployeeOption[] }>('/api/employees'),
         apiRequest<{ items: SupplierOption[] }>('/api/suppliers'),
+        apiRequest<{ items: GpsProviderOption[] }>('/api/gps-providers'),
+        apiRequest<{ items: ExchangeRateOption[] }>('/api/exchange-rates'),
       ]);
       setProjects(projectResult.items ?? []);
       setEmployees(employeeResult.items ?? []);
       setSuppliers(supplierResult.items ?? []);
+      setGpsProviders(gpsProviderResult.items ?? []);
+      setExchangeRates(exchangeRateResult.items ?? []);
     } catch (error) {
       message.error((error as Error).message);
     } finally {
@@ -1492,6 +1617,38 @@ export function OversizeTaskManagementPage({ openRequest }: { openRequest?: Over
     }
   };
 
+  const predictSchedulePlan = async () => {
+    if (!selectedTask) return;
+    setSchedulePredicting(true);
+    try {
+      const result = await apiRequest<SchedulePredictionResult>(`/api/transport-tasks/${selectedTask.id}/workflow/schedule/predict`, {
+        method: 'POST',
+      });
+      setSchedulePrediction(result);
+    } catch (error) {
+      message.error((error as Error).message);
+    } finally {
+      setSchedulePredicting(false);
+    }
+  };
+
+  const applySchedulePrediction = async () => {
+    if (!selectedTask) return;
+    setSchedulePredictionApplying(true);
+    try {
+      await apiRequest(`/api/transport-tasks/${selectedTask.id}/workflow/schedule/predict?apply=true`, {
+        method: 'POST',
+      });
+      message.success('时效预测已应用');
+      setSchedulePrediction(null);
+      await loadTaskWorkflow(selectedTask.id);
+    } catch (error) {
+      message.error((error as Error).message);
+    } finally {
+      setSchedulePredictionApplying(false);
+    }
+  };
+
   const openWorkflowNodeModal = (node: WorkflowInstanceNode, action: string) => {
     if (isCompletedTask(selectedTask)) {
       message.info('运输任务已完成，不能再操作流程。');
@@ -1506,21 +1663,27 @@ export function OversizeTaskManagementPage({ openRequest }: { openRequest?: Over
         field.fieldType === 'datetime' ? toDateValue(rawFormValues[field.fieldKey] as string | null) ?? dayjs() : rawFormValues[field.fieldKey],
       ]),
     );
+    const gpsFormValues = shouldShowGpsFields(node)
+      ? {
+          gpsProviderId: rawFormValues.gpsProviderId || node.gpsProviderId,
+          gpsDeviceNo: rawFormValues.gpsDeviceNo || rawFormValues.gpsDeviceId || rawFormValues.deviceNo || node.gpsDeviceNo,
+        }
+      : {};
     workflowForm.setFieldsValue({
-      operator: '',
+      operator: node.owner || '',
       operationTime: dayjs(),
       remark: '',
       uploadFiles: [],
       customerVisible: false,
       visibilityLevel: '内部资料',
       supplierId: node.supplierId,
-      supplierVehicleId: node.supplierVehicleId,
-      supplierDriverId: node.supplierDriverId,
+      supplierVehicleId: node.supplierVehicleId ? [node.supplierVehicleId] : undefined,
+      supplierDriverId: node.supplierDriverId ? [node.supplierDriverId] : undefined,
       serviceCost: node.serviceCost,
       serviceCurrency: node.serviceCurrency || 'CNY',
       serviceExchangeRate: node.serviceExchangeRate || 1,
       serviceRemark: node.serviceRemark,
-      formValues: normalizedFormValues,
+      formValues: { ...normalizedFormValues, ...gpsFormValues },
     });
   };
 
@@ -1528,6 +1691,28 @@ export function OversizeTaskManagementPage({ openRequest }: { openRequest?: Over
     try {
       const result = await apiRequest<{ sent?: number }>(`/api/workflow/instance-nodes/${node.id}/remind`, { method: 'POST' });
       message.success(`催办已发送${result.sent ? `：${result.sent} 人` : ''}`);
+    } catch (error) {
+      message.error((error as Error).message);
+    }
+  };
+
+  const fetchGpsLatestPosition = async (node: WorkflowInstanceNode) => {
+    if (!selectedTask) return;
+    try {
+      await apiRequest(`/api/workflow/instance-nodes/${node.id}/gps/latest-position`, { method: 'POST' });
+      message.success('GPS最新位置已写入节点跟踪记录');
+      await loadTaskWorkflow(selectedTask.id);
+    } catch (error) {
+      message.error((error as Error).message);
+    }
+  };
+
+  const deleteWorkflowNodeFile = async (fileId?: string | null) => {
+    if (!selectedTask || !fileId) return;
+    try {
+      await apiRequest(`/api/workflow/node-files/${fileId}`, { method: 'DELETE' });
+      message.success('附件已删除');
+      await loadTaskWorkflow(selectedTask.id);
     } catch (error) {
       message.error((error as Error).message);
     }
@@ -1691,8 +1876,55 @@ export function OversizeTaskManagementPage({ openRequest }: { openRequest?: Over
       const uploaded = await uploadWorkflowFiles(values.uploadFiles);
       const formValueMap = values.formValues ?? {};
       const supplier = suppliers.find((item) => item.id === values.supplierId);
-      const vehicle = supplier?.vehicles?.find((item) => item.id === values.supplierVehicleId);
-      const driver = supplier?.drivers?.find((item) => item.id === values.supplierDriverId);
+      let supplierVehicleId = singleSelectText(values.supplierVehicleId);
+      let supplierDriverId = singleSelectText(values.supplierDriverId);
+      let vehicle = supplier?.vehicles?.find((item) => item.id === supplierVehicleId);
+      let driver = supplier?.drivers?.find((item) => item.id === supplierDriverId);
+      const typedVehiclePlateNo = supplierVehicleId && !vehicle ? supplierVehicleId : '';
+      const typedDriverName = supplierDriverId && !driver ? supplierDriverId : '';
+      if (!vehicle) supplierVehicleId = '';
+      if (!driver) supplierDriverId = '';
+
+      if (!supplierVehicleId && values.supplierId && (values.manualVehiclePlateNo || typedVehiclePlateNo)) {
+        const manualVehiclePlateNo = values.manualVehiclePlateNo || typedVehiclePlateNo;
+        const createdVehicle = await apiRequest<{ id: string }>(`/api/suppliers/${values.supplierId}/vehicles`, {
+          method: 'POST',
+          body: JSON.stringify({
+            plateNo: manualVehiclePlateNo,
+            vehicleType: values.manualVehicleType,
+            requiredVehicleType: values.manualRequiredVehicleType,
+            vehicleLength: values.manualVehicleLength,
+            axle: values.manualVehicleAxle,
+          }),
+        });
+        supplierVehicleId = createdVehicle.id;
+        vehicle = {
+          id: createdVehicle.id,
+          plateNo: manualVehiclePlateNo,
+          vehicleType: values.manualVehicleType,
+          requiredVehicleType: values.manualRequiredVehicleType,
+          vehicleLength: values.manualVehicleLength,
+          axle: values.manualVehicleAxle,
+        };
+      }
+
+      if (!supplierDriverId && values.supplierId && (values.manualDriverName || typedDriverName)) {
+        const manualDriverName = values.manualDriverName || typedDriverName;
+        const createdDriver = await apiRequest<{ id: string }>(`/api/suppliers/${values.supplierId}/drivers`, {
+          method: 'POST',
+          body: JSON.stringify({
+            name: manualDriverName,
+            phone: values.manualDriverPhone,
+          }),
+        });
+        supplierDriverId = createdDriver.id;
+        driver = {
+          id: createdDriver.id,
+          name: manualDriverName,
+          phone: values.manualDriverPhone,
+        };
+      }
+
       await apiRequest(`/api/workflow/instance-nodes/${workflowNodeModal.record.id}/${workflowAction}`, {
         method: 'POST',
         body: JSON.stringify({
@@ -1704,9 +1936,9 @@ export function OversizeTaskManagementPage({ openRequest }: { openRequest?: Over
           supplierId: values.supplierId,
           supplierName: supplier?.name ?? '',
           supplierType: supplierRoleList(supplier).join(' / '),
-          supplierVehicleId: values.supplierVehicleId,
+          supplierVehicleId,
           vehiclePlateNo: vehicle?.plateNo ?? '',
-          supplierDriverId: values.supplierDriverId,
+          supplierDriverId,
           driverName: driver?.name ?? '',
           driverPhone: driver?.phone ?? '',
           serviceCost: values.serviceCost,
@@ -1716,10 +1948,11 @@ export function OversizeTaskManagementPage({ openRequest }: { openRequest?: Over
           files: uploaded,
           formValues: Object.entries(formValueMap).map(([fieldKey, fieldValue]) => {
             const fieldConfig = workflowNodeModal.record?.formFields?.find((field) => field.fieldKey === fieldKey);
-            const fieldType = fieldConfig?.fieldType ?? 'text';
+            const gpsFieldConfig = workflowGpsFieldMeta[fieldKey];
+            const fieldType = fieldConfig?.fieldType ?? gpsFieldConfig?.fieldType ?? 'text';
             return {
               fieldKey,
-              fieldName: fieldConfig?.fieldName ?? fieldKey,
+              fieldName: fieldConfig?.fieldName ?? gpsFieldConfig?.fieldName ?? fieldKey,
               fieldType,
               fieldValue: fieldType === 'datetime' ? serializeDateValue(fieldValue, 'YYYY-MM-DD HH:mm') : String(fieldValue ?? ''),
             };
@@ -1768,24 +2001,35 @@ export function OversizeTaskManagementPage({ openRequest }: { openRequest?: Over
     {
       title: '任务号',
       dataIndex: 'taskNo',
-      width: 220,
+      width: 240,
       fixed: 'left',
       render: (value, record) => (
-        <Button type="link" style={{ padding: 0 }} onClick={() => openTaskDetail(record)}>
-          {value}
-        </Button>
+        <Space direction="vertical" size={2}>
+          <Button type="link" style={{ padding: 0, height: 'auto', lineHeight: 1.2 }} onClick={() => openTaskDetail(record)}>
+            {value}
+          </Button>
+          <span style={{ color: '#64748b', fontSize: 12, lineHeight: 1.2 }}>
+            {record.customerShortName || record.customerName || '-'}
+          </span>
+        </Space>
       ),
     },
-    { title: '客户名称', dataIndex: 'customerName', width: 180, render: (value) => value || '-' },
     { title: '项目名称', dataIndex: 'projectName', width: 220 },
     {
       title: '当前节点',
       width: 130,
-      render: (_, record) => <Tag color={record.workflowCurrentNodeStatus === '异常' ? 'error' : 'processing'}>{currentTaskNode(record)}</Tag>,
+      render: (_, record) => {
+        const owner = resolveTaskOwner(record);
+        return (
+          <Space direction="vertical" size={2}>
+            <Tag color={record.workflowCurrentNodeStatus === '异常' ? 'error' : 'processing'}>{currentTaskNode(record)}</Tag>
+            {owner ? <span style={{ color: '#64748b', fontSize: 12, lineHeight: 1.2 }}>{owner}</span> : null}
+          </Space>
+        );
+      },
     },
     { title: '状态', dataIndex: 'status', width: 100, render: (value) => <Tag color={statusColor[value] ?? 'default'}>{value}</Tag> },
     { title: '进度', dataIndex: 'progress', width: 140, render: (value) => <Progress percent={Number(value) || 0} size="small" /> },
-    { title: '项目编号', dataIndex: 'projectNo', width: 180 },
     { title: '车牌/车辆', dataIndex: 'vehicleNo', width: 140 },
     { title: '车型', dataIndex: 'vehicleType', width: 160 },
     { title: '司机', dataIndex: 'driverName', width: 120 },
@@ -1806,6 +2050,8 @@ export function OversizeTaskManagementPage({ openRequest }: { openRequest?: Over
         ),
     },
   ];
+  const gpsTrackNode =
+    taskWorkflow?.nodes.find((node) => shouldShowGpsFields(node) && Boolean(workflowGpsDeviceNo(node))) ?? null;
 
   return (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
@@ -2095,10 +2341,14 @@ export function OversizeTaskManagementPage({ openRequest }: { openRequest?: Over
             <Card size="small" title="节点处理">
               {!isCompletedTask(selectedTask) ? (
                 <div style={{ marginBottom: 12, textAlign: 'right' }}>
+                  <Button size="small" loading={schedulePredicting} onClick={predictSchedulePlan} style={{ marginRight: 8 }}>
+                    时效预测
+                  </Button>
                   <Button size="small" onClick={openScheduleModal}>编辑时效计划</Button>
                 </div>
               ) : null}
               <Table
+                className="workflow-node-table"
                 rowKey="id"
                 size="small"
                 pagination={false}
@@ -2131,10 +2381,22 @@ export function OversizeTaskManagementPage({ openRequest }: { openRequest?: Over
                       record.files?.length ? (
                         <Space wrap>
                           {record.files.map((file) => (
-                            <a key={file.key ?? file.fileUrl} href={fileUrl(file.fileUrl)} target="_blank" rel="noreferrer">
-                              <PaperClipOutlined /> {file.fileName}
-                              {file.visibilityLevel ? <Tag style={{ marginLeft: 4 }}>{file.visibilityLevel}</Tag> : null}
-                            </a>
+                            <Space key={file.key ?? file.fileUrl} size={4}>
+                              <a href={fileUrl(file.fileUrl)} target="_blank" rel="noreferrer">
+                                <PaperClipOutlined /> {file.fileName}
+                                {file.visibilityLevel ? <Tag style={{ marginLeft: 4 }}>{file.visibilityLevel}</Tag> : null}
+                              </a>
+                              {!isCompletedTask(selectedTask) && file.key ? (
+                                <Popconfirm
+                                  title="确认删除该附件？"
+                                  okText="删除"
+                                  cancelText="取消"
+                                  onConfirm={() => void deleteWorkflowNodeFile(file.key)}
+                                >
+                                  <Button size="small" type="text" danger icon={<DeleteOutlined />} />
+                                </Popconfirm>
+                              ) : null}
+                            </Space>
                           ))}
                         </Space>
                       ) : (
@@ -2184,6 +2446,13 @@ export function OversizeTaskManagementPage({ openRequest }: { openRequest?: Over
                 ) : null
               }
             >
+              {gpsTrackNode && !isCompletedTask(selectedTask) ? (
+                <div style={{ marginBottom: 12, textAlign: 'right' }}>
+                  <Button size="small" onClick={() => void fetchGpsLatestPosition(gpsTrackNode)}>
+                    获取GPS轨迹
+                  </Button>
+                </div>
+              ) : null}
               {taskWorkflow?.trackingRecords?.length ? (
                 <Timeline
                   items={sortTrackingRecords(taskWorkflow.trackingRecords).map((record) => ({
@@ -2339,6 +2608,75 @@ export function OversizeTaskManagementPage({ openRequest }: { openRequest?: Over
       </Drawer>
 
       <Modal
+        title="时效预测"
+        open={Boolean(schedulePrediction)}
+        onCancel={() => setSchedulePrediction(null)}
+        onOk={applySchedulePrediction}
+        confirmLoading={schedulePredictionApplying}
+        okText="应用预测"
+        cancelText="关闭"
+        width={980}
+      >
+        <Space direction="vertical" size={12} style={{ width: '100%' }}>
+          <Descriptions size="small" column={2} bordered>
+            <Descriptions.Item label="任务号">{selectedTask?.taskNo ?? '-'}</Descriptions.Item>
+            <Descriptions.Item label="预测基准时间">
+              {schedulePrediction?.baseTime ? formatBeijingTime(schedulePrediction.baseTime) : '-'}
+            </Descriptions.Item>
+          </Descriptions>
+          <Table
+            rowKey="id"
+            size="small"
+            pagination={false}
+            dataSource={schedulePrediction?.items ?? []}
+            columns={[
+              {
+                title: '节点',
+                dataIndex: 'nodeName',
+                width: 140,
+              },
+              {
+                title: '状态',
+                dataIndex: 'status',
+                width: 100,
+                render: (value: string) => <Tag>{value || '-'}</Tag>,
+              },
+              {
+                title: '预测开始',
+                dataIndex: 'plannedStartAt',
+                width: 170,
+                render: (value: string | null) => (value ? formatBeijingTime(value) : '-'),
+              },
+              {
+                title: '预测完成',
+                dataIndex: 'plannedEndAt',
+                width: 170,
+                render: (value: string | null) => (value ? formatBeijingTime(value) : '-'),
+              },
+              {
+                title: '计划耗时/h',
+                dataIndex: 'plannedDurationHours',
+                width: 110,
+                render: (value: number | null) => value ?? '-',
+              },
+              {
+                title: '工作时间规则',
+                dataIndex: 'workingTimeRuleName',
+                width: 160,
+                render: (value: string | null) => value || '-',
+              },
+              {
+                title: '备注',
+                dataIndex: 'scheduleRemark',
+                render: (value: string | null) => value || '-',
+              },
+            ]}
+            scroll={{ x: 900 }}
+          />
+        </Space>
+      </Modal>
+
+      <Modal
         title="编辑时效计划"
         open={scheduleModalOpen}
         onCancel={() => setScheduleModalOpen(false)}
@@ -2429,7 +2767,7 @@ export function OversizeTaskManagementPage({ openRequest }: { openRequest?: Over
         <Form form={workflowForm} layout="vertical">
           <Row gutter={16}>
             <Col span={12}>
-              <Form.Item name="operator" label="操作人">
+              <Form.Item name="operator" label="操作人" rules={[{ required: true, message: '请选择操作人' }]}>
                 <Select
                   allowClear
                   showSearch
@@ -2460,7 +2798,19 @@ export function OversizeTaskManagementPage({ openRequest }: { openRequest?: Over
                       optionFilterProp="label"
                       options={workflowSupplierOptions}
                       placeholder="请选择供应商"
-                      onChange={() => workflowForm.setFieldsValue({ supplierVehicleId: undefined, supplierDriverId: undefined })}
+                      onChange={() =>
+                        workflowForm.setFieldsValue({
+                          supplierVehicleId: undefined,
+                          supplierDriverId: undefined,
+                          manualVehiclePlateNo: undefined,
+                          manualVehicleType: undefined,
+                          manualRequiredVehicleType: undefined,
+                          manualVehicleLength: undefined,
+                          manualVehicleAxle: undefined,
+                          manualDriverName: undefined,
+                          manualDriverPhone: undefined,
+                        })
+                      }
                     />
                   </Form.Item>
                 </Col>
@@ -2473,13 +2823,26 @@ export function OversizeTaskManagementPage({ openRequest }: { openRequest?: Over
                   <Form.Item
                     name="supplierVehicleId"
                     label="服务车辆"
-                    rules={workflowNodeModal.record?.requireVehicle && workflowAction === 'submit' ? [{ required: true, message: '请选择服务车辆' }] : []}
+                    rules={
+                      workflowNodeModal.record?.requireVehicle && workflowAction === 'submit'
+                        ? [
+                            {
+                              validator: async (_, value) => {
+                                if (singleSelectText(value) || workflowForm.getFieldValue('manualVehiclePlateNo')) return;
+                                throw new Error('请选择服务车辆，或手动填写车牌号');
+                              },
+                            },
+                          ]
+                        : []
+                    }
                   >
                     <Select
                       allowClear
+                      mode="tags"
                       showSearch
                       optionFilterProp="label"
                       disabled={!selectedWorkflowSupplier}
+                      onChange={(value) => workflowForm.setFieldValue('supplierVehicleId', Array.isArray(value) ? value.slice(-1) : value)}
                       options={(selectedWorkflowSupplier?.vehicles ?? []).map((vehicle) => ({
                         value: vehicle.id,
                         label: `${vehicle.plateNo || '未填车牌'} · ${[vehicle.requiredVehicleType, vehicle.vehicleLength, vehicle.axle].filter(Boolean).join(' / ') || vehicle.vehicleType || '-'}`,
@@ -2492,13 +2855,26 @@ export function OversizeTaskManagementPage({ openRequest }: { openRequest?: Over
                   <Form.Item
                     name="supplierDriverId"
                     label="服务司机"
-                    rules={workflowNodeModal.record?.requireDriver && workflowAction === 'submit' ? [{ required: true, message: '请选择服务司机' }] : []}
+                    rules={
+                      workflowNodeModal.record?.requireDriver && workflowAction === 'submit'
+                        ? [
+                            {
+                              validator: async (_, value) => {
+                                if (singleSelectText(value) || workflowForm.getFieldValue('manualDriverName')) return;
+                                throw new Error('请选择服务司机，或手动填写司机姓名');
+                              },
+                            },
+                          ]
+                        : []
+                    }
                   >
                     <Select
                       allowClear
+                      mode="tags"
                       showSearch
                       optionFilterProp="label"
                       disabled={!selectedWorkflowSupplier}
+                      onChange={(value) => workflowForm.setFieldValue('supplierDriverId', Array.isArray(value) ? value.slice(-1) : value)}
                       options={(selectedWorkflowSupplier?.drivers ?? []).map((driver) => ({
                         value: driver.id,
                         label: `${driver.name}${driver.phone ? ` · ${driver.phone}` : ''}`,
@@ -2507,6 +2883,44 @@ export function OversizeTaskManagementPage({ openRequest }: { openRequest?: Over
                     />
                   </Form.Item>
                 </Col>
+                {workflowNodeModal.record?.requireVehicle ? (
+                  <>
+                    <Col xs={24} md={12}>
+                      <Form.Item name="manualVehiclePlateNo" label="手动新增车辆-车牌号">
+                        <Input disabled={!selectedWorkflowSupplier || Boolean(selectedWorkflowVehicleId)} placeholder="下拉没有车辆时填写，保存后自动加入供应商车辆" />
+                      </Form.Item>
+                    </Col>
+                    <Col xs={24} md={12}>
+                      <Form.Item name="manualRequiredVehicleType" label="手动新增车辆-需求车型">
+                        <Input disabled={!selectedWorkflowSupplier || Boolean(selectedWorkflowVehicleId)} placeholder="如：平板、篷布车、特种板" />
+                      </Form.Item>
+                    </Col>
+                    <Col xs={24} md={12}>
+                      <Form.Item name="manualVehicleLength" label="手动新增车辆-车长">
+                        <Input disabled={!selectedWorkflowSupplier || Boolean(selectedWorkflowVehicleId)} placeholder="如：13米、17米、17.5米" />
+                      </Form.Item>
+                    </Col>
+                    <Col xs={24} md={12}>
+                      <Form.Item name="manualVehicleAxle" label="手动新增车辆-车轴">
+                        <Input disabled={!selectedWorkflowSupplier || Boolean(selectedWorkflowVehicleId)} placeholder="如：5轴、6轴" />
+                      </Form.Item>
+                    </Col>
+                  </>
+                ) : null}
+                {workflowNodeModal.record?.requireDriver ? (
+                  <>
+                    <Col xs={24} md={12}>
+                      <Form.Item name="manualDriverName" label="手动新增司机-姓名">
+                        <Input disabled={!selectedWorkflowSupplier || Boolean(selectedWorkflowDriverId)} placeholder="下拉没有司机时填写，保存后自动加入供应商司机" />
+                      </Form.Item>
+                    </Col>
+                    <Col xs={24} md={12}>
+                      <Form.Item name="manualDriverPhone" label="手动新增司机-电话">
+                        <Input disabled={!selectedWorkflowSupplier || Boolean(selectedWorkflowDriverId)} placeholder="司机联系电话" />
+                      </Form.Item>
+                    </Col>
+                  </>
+                ) : null}
                 <Col xs={24} md={12}>
                   <Form.Item label="已选车辆信息">
                     <Input disabled value={selectedWorkflowVehicle ? [selectedWorkflowVehicle.plateNo, selectedWorkflowVehicle.vehicleLength, selectedWorkflowVehicle.axle].filter(Boolean).join(' / ') : ''} />
@@ -2519,7 +2933,13 @@ export function OversizeTaskManagementPage({ openRequest }: { openRequest?: Over
                 </Col>
                 <Col xs={24} md={6}>
                   <Form.Item name="serviceCurrency" label="费用币种">
-                    <Select options={['CNY', 'USD', 'KZT', 'RUB'].map((value) => ({ value, label: value }))} />
+                    <Select
+                      options={currencyOptions}
+                      onChange={(value) => {
+                        const rate = exchangeRateForCurrency(value);
+                        if (rate) workflowForm.setFieldValue('serviceExchangeRate', rate);
+                      }}
+                    />
                   </Form.Item>
                 </Col>
                 <Col xs={24} md={6}>
@@ -2530,6 +2950,39 @@ export function OversizeTaskManagementPage({ openRequest }: { openRequest?: Over
                 <Col xs={24}>
                   <Form.Item name="serviceRemark" label="供应商备注">
                     <Input.TextArea rows={2} />
+                  </Form.Item>
+                </Col>
+              </Row>
+            </Card>
+          ) : null}
+          {shouldShowGpsFields(workflowNodeModal.record) ? (
+            <Card size="small" title="GPS设备" style={{ marginBottom: 16 }}>
+              <Row gutter={16}>
+                <Col xs={24} md={12}>
+                  <Form.Item
+                    name={['formValues', 'gpsProviderId']}
+                    label="GPS服务商"
+                    rules={workflowNodeModal.record?.requireGps && workflowAction === 'submit' ? [{ required: true, message: '请选择GPS服务商' }] : []}
+                  >
+                    <Select
+                      allowClear
+                      showSearch
+                      optionFilterProp="label"
+                      options={activeGpsProviders.map((provider) => ({
+                        value: provider.id,
+                        label: `${provider.shortName} / ${provider.name}`,
+                      }))}
+                      placeholder="请选择GPS服务商"
+                    />
+                  </Form.Item>
+                </Col>
+                <Col xs={24} md={12}>
+                  <Form.Item
+                    name={['formValues', 'gpsDeviceNo']}
+                    label="GPS设备号"
+                    rules={workflowNodeModal.record?.requireGps && workflowAction === 'submit' ? [{ required: true, message: '请输入GPS设备号' }] : []}
+                  >
+                    <Input placeholder="填写车辆GPS设备号" />
                   </Form.Item>
                 </Col>
               </Row>
@@ -2650,7 +3103,13 @@ export function OversizeTaskManagementPage({ openRequest }: { openRequest?: Over
             </Col>
             <Col span={6}>
               <Form.Item name="currency" label="币种" rules={[{ required: true, message: '请选择币种' }]}>
-                <Select options={['CNY', 'USD', 'KZT', 'RUB'].map((value) => ({ value, label: value }))} />
+                <Select
+                  options={currencyOptions}
+                  onChange={(value) => {
+                    const rate = exchangeRateForCurrency(value);
+                    if (rate) costForm.setFieldValue('exchangeRate', rate);
+                  }}
+                />
               </Form.Item>
             </Col>
             <Col span={6}>

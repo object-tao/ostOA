@@ -29,6 +29,7 @@ export function saveSession(token: string, user: SessionUser) {
 export function clearSession() {
   localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem(USER_KEY);
+  window.dispatchEvent(new Event('ostoa-session-cleared'));
 }
 
 export function getSessionUser(): SessionUser | null {

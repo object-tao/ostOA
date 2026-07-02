@@ -49,7 +49,7 @@ type TrackingTask = {
 
 function fileUrl(value: string) {
   if (value.startsWith('http')) return value;
-  const configuredApiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? 'http://127.0.0.1:8787';
+  const configuredApiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? 'https://api.ostoa.org';
   const isLocalBrowser =
     typeof window !== 'undefined' &&
     (window.location.hostname === '127.0.0.1' || window.location.hostname === 'localhost' || window.location.hostname.startsWith('192.168.'));
@@ -73,12 +73,14 @@ function routeDurationText(task: TrackingTask) {
   const destination = task.destination || '-';
   const records = sortTrackingRecords(task.trackingRecords);
   if (records.length < 2) {
-    return `${origin} → ${destination} (0 天)`;
+    return `${origin} → ${destination} (0 天 / 0 小时)`;
   }
   const latest = trackingTimeValue(records[0]?.trackedAt);
   const first = trackingTimeValue(records[records.length - 1]?.trackedAt);
-  const diffDays = latest > first ? Math.ceil((latest - first) / (24 * 60 * 60 * 1000)) : 0;
-  return `${origin} → ${destination} (${diffDays} 天)`;
+  const diffMs = latest > first ? latest - first : 0;
+  const diffDays = diffMs > 0 ? Math.ceil(diffMs / (24 * 60 * 60 * 1000)) : 0;
+  const diffHours = diffMs > 0 ? Math.ceil(diffMs / (60 * 60 * 1000)) : 0;
+  return `${origin} → ${destination} (${diffDays} 天 / ${diffHours} 小时)`;
 }
 
 export function TrackingPage() {
