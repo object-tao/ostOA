@@ -10377,15 +10377,15 @@ export default {
     }
 
     if (url.pathname === '/api/inquiry-tasks' && request.method === 'GET') {
-      return json({ items: await listInquiryTasks(env, user) }, { status: 200 }, origin);
+      return json({ items: await listInquiryTasks(env, sessionUser) }, { status: 200 }, origin);
     }
 
     if (url.pathname === '/api/inquiry-tasks' && request.method === 'POST') {
-      const result = await createInquiryTask(env, user, await parseBody<InquiryTaskPayload>(request));
+      const result = await createInquiryTask(env, sessionUser, await parseBody<InquiryTaskPayload>(request));
       if (result.error !== undefined) {
         return badRequest(origin, result.error);
       }
-      return json(await getInquiryTask(env, result.id, user), { status: 201 }, origin);
+      return json(await getInquiryTask(env, result.id, sessionUser), { status: 201 }, origin);
     }
 
     const inquiryTaskActionMatch = url.pathname.match(/^\/api\/inquiry-tasks\/([^/]+)\/(quote|confirm)$/);
@@ -10394,17 +10394,17 @@ export default {
       const body = await parseBody<InquiryTaskQuotePayload & InquiryTaskConfirmPayload>(request);
       const result =
         action === 'quote'
-          ? await quoteInquiryTask(env, user, id, body)
-          : await confirmInquiryTask(env, user, id, body);
+          ? await quoteInquiryTask(env, sessionUser, id, body)
+          : await confirmInquiryTask(env, sessionUser, id, body);
       if (result.error !== undefined) {
         return badRequest(origin, result.error);
       }
-      return json(await getInquiryTask(env, id, user), { status: 200 }, origin);
+      return json(await getInquiryTask(env, id, sessionUser), { status: 200 }, origin);
     }
 
     const inquiryTaskMatch = url.pathname.match(/^\/api\/inquiry-tasks\/([^/]+)$/);
     if (inquiryTaskMatch && request.method === 'GET') {
-      const item = await getInquiryTask(env, inquiryTaskMatch[1], user);
+      const item = await getInquiryTask(env, inquiryTaskMatch[1], sessionUser);
       if (!item) {
         return notFound(origin, 'Inquiry task not found.');
       }
